@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
 import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types';
-import { Coins, Trophy, Calculator, X, Save, Settings, Undo2 } from 'lucide-react';
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -14,7 +14,7 @@ export default function DashboardPage() {
     activePlayers, 
     updateChip, 
     updateScore, 
-    updateAllPlayers, // ▼ 追加
+    updateAllPlayers,
     resetGame, 
     undo,
     history 
@@ -30,15 +30,18 @@ export default function DashboardPage() {
   const [chipAmount, setChipAmount] = useState<number>(1);
   const [winnerId, setWinnerId] = useState<string>('');
   const [loserId, setLoserId] = useState<string>('');
+  
+  // 順位・飛び用のState
   const [rankSelection, setRankSelection] = useState<Record<string, RankType>>({});
+  const [isTobi, setIsTobi] = useState(false);        // 飛びが発生したか
+  const [tobiLoserId, setTobiLoserId] = useState(''); // 飛んだ人
+  const [tobiWinnerId, setTobiWinnerId] = useState(''); // 飛ばした人
 
   useEffect(() => {
     if (activePlayers.length !== 4) router.push('/game/setup');
   }, [activePlayers, router]);
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
-
-  // --- ヘルパー: 順位文字列を数値に変換 ---
   const rankToNumber = (rank: string): number => {
     if (rank.includes('1')) return 1;
     if (rank.includes('2')) return 2;
@@ -47,11 +50,10 @@ export default function DashboardPage() {
     return 0;
   };
 
-  // --- チップ計算処理 (一括更新版) ---
+  // --- チップ計算処理 ---
   const handleChipSubmit = () => {
     if (!winnerId || chipAmount <= 0) return;
 
-    // 現在の状態をコピーして計算
     const newPlayers = activePlayers.map(p => {
       let change = 0;
       if (chipAction === 'tsumo') {
@@ -64,7 +66,6 @@ export default function DashboardPage() {
       return { ...p, chip: p.chip + change };
     });
 
-    // 一括更新 (これでUndo履歴が1つになる)
     updateAllPlayers(newPlayers);
     closeChipModal();
   };
@@ -76,19 +77,36 @@ export default function DashboardPage() {
     setChipAmount(1);
   };
 
-  // --- 順位精算処理 (一括更新版) ---
+  // --- 順位精算処理 (飛び対応版) ---
   const handleRankSubmit = () => {
     if (Object.keys(rankSelection).length !== 4) return;
-    const selectedRanks = Object.values(rankSelection);
     
+    // 飛びのバリデーション
+    if (isTobi) {
+        if (!tobiLoserId || !tobiWinnerId) {
+            alert('飛んだ人と飛ばした人を選択してください');
+            return;
+        }
+        if (tobiLoserId === tobiWinnerId) {
+            alert('飛んだ人と飛ばした人が同じです');
+            return;
+        }
+    }
+
+    const selectedRanks = Object.values(rankSelection);
     const chipDeltas = calculateRankChips(selectedRanks);
     const scoreMap = calculateSplitScores(selectedRanks);
     
-    // 現在の状態をコピーして計算
     const newPlayers = activePlayers.map(p => {
       const rankStr = rankSelection[p.id];
-      const chipChange = chipDeltas[rankStr];
+      let chipChange = chipDeltas[rankStr];
       const scoreChange = scoreMap[rankStr];
+
+      // ▼ 追加: 飛び賞の計算
+      if (isTobi) {
+        if (p.id === tobiWinnerId) chipChange += 2; // 飛ばした人 +2
+        if (p.id === tobiLoserId) chipChange -= 2;  // 飛んだ人 -2
+      }
 
       return {
         ...p,
@@ -98,11 +116,15 @@ export default function DashboardPage() {
       };
     });
 
-    // 一括更新 (これでUndo履歴が1つになる)
     updateAllPlayers(newPlayers);
     
     setModal('none');
-    alert('順位とウマを反映しました。');
+    // Stateリセット
+    setIsTobi(false);
+    setTobiLoserId('');
+    setTobiWinnerId('');
+    
+    alert('順位・ウマ・飛び賞を反映しました。');
   };
 
   // --- 最終保存処理 ---
@@ -141,7 +163,6 @@ export default function DashboardPage() {
       {/* ヘッダー */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold text-gray-700">対局中</h1>
-        
         <div className="flex items-center gap-2">
            <button 
              onClick={undo}
@@ -200,7 +221,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* モーダル群 (変更なし) */}
+      {/* モーダル: 個別調整 */}
       {modal === 'adjust' && adjustingPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -228,6 +249,8 @@ export default function DashboardPage() {
             </div>
         </div>
       )}
+
+      {/* モーダル: チップ */}
       {modal === 'chip' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -263,6 +286,8 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* モーダル: 順位精算 (飛び対応UI追加) */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -270,6 +295,8 @@ export default function DashboardPage() {
               <h2 className="text-xl font-bold flex items-center gap-2"><Trophy /> 順位精算</h2>
               <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
             </div>
+
+            {/* 順位選択エリア */}
             <div className="space-y-4 mb-6">
               {activePlayers.map(p => (
                 <div key={p.id} className="flex flex-col gap-1">
@@ -286,10 +313,57 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+
+            {/* ▼ 飛び賞の設定エリア */}
+            <div className="bg-red-50 p-4 rounded-xl mb-6 border border-red-100">
+                <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setIsTobi(!isTobi)}>
+                    <div className={`w-5 h-5 border-2 rounded flex items-center justify-center ${isTobi ? 'bg-red-500 border-red-500 text-white' : 'border-gray-400 bg-white'}`}>
+                        {isTobi && <Settings size={14} />}
+                    </div>
+                    <span className="font-bold text-gray-700 flex items-center gap-1">
+                        <AlertTriangle size={18} className="text-red-500"/>
+                        飛び発生 (チップ±2)
+                    </span>
+                </div>
+
+                {isTobi && (
+                    <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2">
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛んだ人 (Loser)</label>
+                            <select 
+                                className="w-full p-2 border rounded-lg bg-white"
+                                value={tobiLoserId}
+                                onChange={(e) => setTobiLoserId(e.target.value)}
+                            >
+                                <option value="">選択...</option>
+                                {activePlayers.map(p => (
+                                    <option key={p.id} value={p.id} disabled={p.id === tobiWinnerId}>{p.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛ばした人 (Winner)</label>
+                            <select 
+                                className="w-full p-2 border rounded-lg bg-white"
+                                value={tobiWinnerId}
+                                onChange={(e) => setTobiWinnerId(e.target.value)}
+                            >
+                                <option value="">選択...</option>
+                                {activePlayers.map(p => (
+                                    <option key={p.id} value={p.id} disabled={p.id === tobiLoserId}>{p.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <button onClick={handleRankSubmit} className="w-full py-4 bg-orange-600 text-white rounded-xl font-bold text-lg">計算して反映</button>
           </div>
         </div>
       )}
+
+      {/* モーダル: 最終精算 */}
       {modal === 'settlement' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
