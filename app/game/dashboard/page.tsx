@@ -21,6 +21,7 @@ export default function DashboardPage() {
     history 
   } = useGameStore();
   
+  
   // ▼▼▼ 読み込み待ちフラグ (初期値 false) ▼▼▼
   const [isLoaded, setIsLoaded] = useState(false);
 
