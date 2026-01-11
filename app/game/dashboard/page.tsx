@@ -6,7 +6,8 @@ import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
 import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types';
-import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle } from 'lucide-react';
+// ▼▼▼ Loader2 を追加しました ▼▼▼
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -20,6 +21,9 @@ export default function DashboardPage() {
     history 
   } = useGameStore();
   
+  // ▼▼▼ 読み込み待ちフラグ (初期値 false) ▼▼▼
+  const [isLoaded, setIsLoaded] = useState(false);
+
   // モーダル制御
   const [modal, setModal] = useState<string>('none');
   const [saving, setSaving] = useState(false);
@@ -37,19 +41,34 @@ export default function DashboardPage() {
   const [tobiLoserId, setTobiLoserId] = useState('');
   const [tobiWinnerId, setTobiWinnerId] = useState('');
 
-  // ▼▼▼ 追加: 画面が表示されたら、保存されたデータを読み込む ▼▼▼
+  // ▼▼▼ 1. データ復元と待機処理 ▼▼▼
+// ▼▼▼ 1. データ復元と待機処理（修正版） ▼▼▼
   useEffect(() => {
-    useGameStore.persist.rehydrate();
+    // TypeScriptの型エラー回避のため as any を使用
+    (useGameStore as any).persist.rehydrate()
+      .then(() => setIsLoaded(true))
+      .catch(() => setIsLoaded(true));
   }, []);
-  // ▲▲▲ 追加終わり ▲▲▲
 
+  // ▼▼▼ 2. ロード完了後に人数チェックを行う ▼▼▼
   useEffect(() => {
-    // データ読み込み完了後、なおかつプレイヤーがいなければセットアップへ
-    // (hasHydratedチェックを入れるとより安全ですが、一旦簡易的にチェック)
-    if (useGameStore.persist.hasHydrated() && activePlayers.length !== 4) {
+    // ロードが終わった(isLoadedがtrue)のにプレイヤーがいない場合のみセットアップへ戻す
+    if (isLoaded && activePlayers.length !== 4) {
         router.push('/game/setup');
     }
-  }, [activePlayers, router]);
+  }, [isLoaded, activePlayers, router]);
+
+  // ▼▼▼ 3. ロード中はローディング画面を表示 ▼▼▼
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="flex flex-col items-center gap-2 text-gray-500">
+          <Loader2 className="animate-spin" size={32} />
+          <p>データを復元中...</p>
+        </div>
+      </div>
+    );
+  }
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
   const rankToNumber = (rank: string): number => {
@@ -129,9 +148,11 @@ export default function DashboardPage() {
     updateAllPlayers(newPlayers);
     
     setModal('none');
+    // リセット
     setIsTobi(false);
     setTobiLoserId('');
     setTobiWinnerId('');
+    setRankSelection({}); 
     
     alert('順位・ウマ・飛び賞を反映しました。');
   };
