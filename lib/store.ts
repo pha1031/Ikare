@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { GamePlayer, Player, RankType } from '@/types';
 
 type GameState = {
@@ -9,72 +10,79 @@ type GameState = {
   updateChip: (playerId: string, amount: number) => void;
   updateRankAndScore: (playerId: string, rank: RankType, score: number) => void;
   updateScore: (playerId: string, amount: number) => void;
-  // ▼ 追加: 全員まとめて更新する関数 (Undo対策)
-  updateAllPlayers: (players: GamePlayer[]) => void; 
   undo: () => void;
   resetGame: () => void;
 };
 
+// ヘルパー: 履歴保存
 const saveHistory = (state: GameState) => {
   const newHistory = [...state.history, state.activePlayers].slice(-10);
   return { history: newHistory };
 };
 
-export const useGameStore = create<GameState>((set) => ({
-  activePlayers: [],
-  history: [],
+export const useGameStore = create<GameState>()(
+  persist(
+    (set) => ({
+      activePlayers: [],
+      history: [],
 
-  setPlayers: (players) => set(() => ({
-    activePlayers: players.map(p => ({
-      ...p, score: 0, chip: 0, rank: null
-    })),
-    history: []
-  })),
+      setPlayers: (players) => set(() => ({
+        activePlayers: players.map(p => ({
+          ...p, score: 0, chip: 0, rank: null
+        })),
+        history: [] // 新しい対局を始めたら履歴はリセット
+      })),
 
-  updateChip: (playerId, amount) => set((state) => ({
-    ...saveHistory(state),
-    activePlayers: state.activePlayers.map(p => 
-      p.id === playerId ? { ...p, chip: p.chip + amount } : p
-    )
-  })),
+      updateChip: (playerId, amount) => set((state) => ({
+        ...saveHistory(state),
+        activePlayers: state.activePlayers.map(p => 
+          p.id === playerId ? { ...p, chip: p.chip + amount } : p
+        )
+      })),
 
-  updateRankAndScore: (playerId, rank, score) => set((state) => ({
-    ...saveHistory(state),
-    activePlayers: state.activePlayers.map(p => 
-      p.id === playerId ? { ...p, rank: anyToNumber(rank), score: p.score + score } : p
-    )
-  })),
+      updateRankAndScore: (playerId, rank, score) => set((state) => ({
+        ...saveHistory(state),
+        activePlayers: state.activePlayers.map(p => 
+          p.id === playerId ? { 
+            ...p, 
+            rank: anyToNumber(rank), 
+            score: p.score + score 
+          } : p
+        )
+      })),
 
-  updateScore: (playerId, amount) => set((state) => ({
-    ...saveHistory(state),
-    activePlayers: state.activePlayers.map(p => 
-      p.id === playerId ? { ...p, score: p.score + amount } : p
-    )
-  })),
+      updateScore: (playerId, amount) => set((state) => ({
+        ...saveHistory(state),
+        activePlayers: state.activePlayers.map(p => 
+          p.id === playerId ? { ...p, score: p.score + amount } : p
+        )
+      })),
 
-  // ▼ 追加: 一括更新の実装
-  updateAllPlayers: (players) => set((state) => ({
-    ...saveHistory(state), // ここで履歴保存は1回だけ行われる
-    activePlayers: players
-  })),
+      undo: () => set((state) => {
+        if (state.history.length === 0) return {};
+        
+        const previousPlayers = state.history[state.history.length - 1];
+        const newHistory = state.history.slice(0, -1);
+        
+        return {
+          activePlayers: previousPlayers,
+          history: newHistory
+        };
+      }),
 
-  undo: () => set((state) => {
-    if (state.history.length === 0) return {};
-    const previousPlayers = state.history[state.history.length - 1];
-    const newHistory = state.history.slice(0, -1);
-    return {
-      activePlayers: previousPlayers,
-      history: newHistory
-    };
-  }),
-
-  resetGame: () => set((state) => ({
-    activePlayers: state.activePlayers.map(p => ({
-      ...p, chip: 0, score: 0, rank: null
-    })),
-    history: []
-  })),
-}));
+      resetGame: () => set((state) => ({
+        activePlayers: state.activePlayers.map(p => ({
+          ...p, chip: 0, score: 0, rank: null
+        })),
+        history: []
+      })),
+    }),
+    {
+      name: 'ikare-storage', // ブラウザに保存する時のキー名
+      storage: createJSONStorage(() => localStorage), // 保存場所（ローカルストレージ）
+    }
+  )
+);
 
 function anyToNumber(rank: string): number {
   if (rank.includes('1')) return 1;
