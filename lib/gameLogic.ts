@@ -10,45 +10,62 @@ export const RANK_SCORE_BASE = {
   '4着': -60,
 };
 
-// 順位の組み合わせに応じたチップ変動ロジック
+/**
+ * チップ変動ロジック
+ * 仕様: 同着がいても「浮いている人の数」でパターン(A,B,C)を判定する
+ */
 export function calculateRankChips(ranks: RankType[]): Record<RankType, number> {
-  const changes: Record<RankType, number> = {
-    '1着': 0, '浮き2着': 0, '沈み2着': 0, 
-    '浮き3着': 0, '沈み3着': 0, '4着': 0
-  };
+  const changes: Record<string, number> = {};
+  
+  // 初期化（念のため入力されたキー全てに0を入れておく）
+  ranks.forEach(r => changes[r] = 0);
 
-  const has = (type: RankType) => ranks.includes(type);
+  // 浮いている人をカウント (1着、または "浮き" を含む順位)
+  const isFloat = (r: string) => r === '1着' || r.includes('浮き');
+  const floatCount = ranks.filter(isFloat).length;
 
-  if (has('沈み2着') && has('沈み3着')) {
-    changes['1着'] = 9;
-    changes['沈み2着'] = -3;
-    changes['沈み3着'] = -3;
-    changes['4着'] = -3;
-  } 
-  else if (has('浮き2着') && has('沈み3着')) {
-    changes['1着'] = 4;
-    changes['浮き2着'] = 2;
-    changes['沈み3着'] = -3;
-    changes['4着'] = -3;
-  } 
-  else if (has('浮き2着') && has('浮き3着')) {
-    changes['1着'] = 2;
-    changes['浮き2着'] = 1;
-    changes['浮き3着'] = 1;
-    changes['4着'] = -4;
+  // --- パターン判定 ---
+
+  // パターンA: 1人浮き (1着のみ)
+  // ※沈み2着×2 の場合などがここに来る
+  if (floatCount <= 1) {
+    ranks.forEach(r => {
+      if (r === '1着') changes[r] = 9;
+      else changes[r] = -3;
+    });
+  }
+  // パターンB: 2人浮き (1着 + もう1人)
+  // ※浮き2着と沈み3着の場合などがここに来る
+  else if (floatCount === 2) {
+    ranks.forEach(r => {
+      if (r === '1着') changes[r] = 4;
+      else if (isFloat(r)) changes[r] = 2; // 浮き2着
+      else changes[r] = -3;                // 沈み3着・4着・(ありえないが沈み2着)
+    });
+  }
+  // パターンC: 3人以上浮き (1着 + 2人以上)
+  // ※浮き2着×2 の場合などがここに来る
+  else {
+    ranks.forEach(r => {
+      if (r === '1着') changes[r] = 2;
+      else if (r === '4着') changes[r] = -4;
+      else changes[r] = 1; // 浮き2着・浮き3着はどちらも+1
+    });
   }
 
-  return changes;
+  return changes as Record<RankType, number>;
 }
 
+
 /**
- * 同着(タイ)を考慮して順位点を計算する関数
+ * 順位点（ウマ）の計算ロジック
+ * 仕様: 同着（同じ選択肢が複数ある場合）は、対象となる順位点を合計して人数で割る
  */
 export function calculateSplitScores(ranks: RankType[]): Record<RankType, number> {
-  // 基本点（順位点）
+  // 順位ごとの基本点 [1着, 2着, 3着, 4着]
   const basePoints = [60, 20, -20, -60];
 
-  // 1. 入力を「順位の数値」に変換して並べる
+  // 1. 入力を「順位の数値」に変換してオブジェクト化
   const parsed = ranks.map(r => {
     let rankNum = 4;
     if (r.includes('1')) rankNum = 1;
@@ -58,28 +75,33 @@ export function calculateSplitScores(ranks: RankType[]): Record<RankType, number
     return { original: r, rankNum };
   });
 
-  // 2. ランク順にソート
+  // 2. ランク順(1->4)にソート
   parsed.sort((a, b) => a.rankNum - b.rankNum);
 
   // 3. ポイント配分計算
   const result: Record<string, number> = {};
   
-  let currentBaseIndex = 0;
+  let currentBaseIndex = 0; // basePointsの何番目を使っているか
   let i = 0;
   while (i < parsed.length) {
+    // 同じ順位の人が何人連続しているか数える（同着判定）
     let count = 1;
     while (i + count < parsed.length && parsed[i + count].rankNum === parsed[i].rankNum) {
       count++;
     }
 
+    // 対応する順位点を取得して平均する
+    // 例: 2着が2人(count=2)なら、basePoints[1](+20) と basePoints[2](-20) を足して 2で割る -> 0
     let sum = 0;
     for (let j = 0; j < count; j++) {
       sum += basePoints[currentBaseIndex + j] || 0;
     }
     const averageScore = sum / count;
 
+    // マップに保存（入力された文字列に対してスコアを割り当て）
     result[parsed[i].original] = averageScore;
 
+    // インデックスを進める
     currentBaseIndex += count;
     i += count;
   }
