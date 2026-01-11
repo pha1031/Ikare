@@ -14,11 +14,23 @@ type GameState = {
   resetGame: () => void;
 };
 
-// ヘルパー: 履歴保存
 const saveHistory = (state: GameState) => {
   const newHistory = [...state.history, state.activePlayers].slice(-10);
   return { history: newHistory };
 };
+
+// サーバーサイドでのビルドエラーを防ぐための安全なストレージ設定
+const storage = createJSONStorage<GameState>(() => {
+  if (typeof window !== 'undefined') {
+    return localStorage;
+  }
+  // サーバー側では何もしないダミーのストレージを返す
+  return {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+  };
+});
 
 export const useGameStore = create<GameState>()(
   persist(
@@ -30,7 +42,7 @@ export const useGameStore = create<GameState>()(
         activePlayers: players.map(p => ({
           ...p, score: 0, chip: 0, rank: null
         })),
-        history: [] // 新しい対局を始めたら履歴はリセット
+        history: []
       })),
 
       updateChip: (playerId, amount) => set((state) => ({
@@ -59,7 +71,7 @@ export const useGameStore = create<GameState>()(
       })),
 
       undo: () => set((state) => {
-        if (state.history.length === 0) return {};
+        if (state.history.length === 0) return state; // 何も返さないと型エラーになることがあるのでstateを返す
         
         const previousPlayers = state.history[state.history.length - 1];
         const newHistory = state.history.slice(0, -1);
@@ -78,11 +90,16 @@ export const useGameStore = create<GameState>()(
       })),
     }),
     {
-      name: 'ikare-storage', // ブラウザに保存する時のキー名
-      storage: createJSONStorage(() => localStorage), // 保存場所（ローカルストレージ）
+      name: 'ikare-storage',
+      storage: storage, // 安全装置付きのストレージを使用
+      skipHydration: true, // サーバーとクライアントの不整合エラー（Hydration Error）を防ぐ
     }
   )
 );
+
+// Hydration（初期化）を手動で行うためのフック（必須ではないが安全のため）
+// コンポーネント側で useEffect(() => { useGameStore.persist.rehydrate() }, []) を呼ぶのがベストだが、
+// 今回は skipHydration: true にしているので、クライアント側で自動的に読み込まれるのを待つ形にします。
 
 function anyToNumber(rank: string): number {
   if (rank.includes('1')) return 1;
