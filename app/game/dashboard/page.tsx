@@ -33,12 +33,22 @@ export default function DashboardPage() {
   
   // 順位・飛び用のState
   const [rankSelection, setRankSelection] = useState<Record<string, RankType>>({});
-  const [isTobi, setIsTobi] = useState(false);        // 飛びが発生したか
-  const [tobiLoserId, setTobiLoserId] = useState(''); // 飛んだ人
-  const [tobiWinnerId, setTobiWinnerId] = useState(''); // 飛ばした人
+  const [isTobi, setIsTobi] = useState(false);
+  const [tobiLoserId, setTobiLoserId] = useState('');
+  const [tobiWinnerId, setTobiWinnerId] = useState('');
+
+  // ▼▼▼ 追加: 画面が表示されたら、保存されたデータを読み込む ▼▼▼
+  useEffect(() => {
+    useGameStore.persist.rehydrate();
+  }, []);
+  // ▲▲▲ 追加終わり ▲▲▲
 
   useEffect(() => {
-    if (activePlayers.length !== 4) router.push('/game/setup');
+    // データ読み込み完了後、なおかつプレイヤーがいなければセットアップへ
+    // (hasHydratedチェックを入れるとより安全ですが、一旦簡易的にチェック)
+    if (useGameStore.persist.hasHydrated() && activePlayers.length !== 4) {
+        router.push('/game/setup');
+    }
   }, [activePlayers, router]);
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
@@ -102,10 +112,10 @@ export default function DashboardPage() {
       let chipChange = chipDeltas[rankStr];
       const scoreChange = scoreMap[rankStr];
 
-      // ▼ 追加: 飛び賞の計算
+      // 飛び賞の計算
       if (isTobi) {
-        if (p.id === tobiWinnerId) chipChange += 2; // 飛ばした人 +2
-        if (p.id === tobiLoserId) chipChange -= 2;  // 飛んだ人 -2
+        if (p.id === tobiWinnerId) chipChange += 2;
+        if (p.id === tobiLoserId) chipChange -= 2;
       }
 
       return {
@@ -119,7 +129,6 @@ export default function DashboardPage() {
     updateAllPlayers(newPlayers);
     
     setModal('none');
-    // Stateリセット
     setIsTobi(false);
     setTobiLoserId('');
     setTobiWinnerId('');
@@ -287,7 +296,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: 順位精算 (飛び対応UI追加) */}
+      {/* モーダル: 順位精算 */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -296,7 +305,6 @@ export default function DashboardPage() {
               <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
             </div>
 
-            {/* 順位選択エリア */}
             <div className="space-y-4 mb-6">
               {activePlayers.map(p => (
                 <div key={p.id} className="flex flex-col gap-1">
@@ -314,7 +322,7 @@ export default function DashboardPage() {
               ))}
             </div>
 
-            {/* ▼ 飛び賞の設定エリア */}
+            {/* 飛び賞の設定エリア */}
             <div className="bg-red-50 p-4 rounded-xl mb-6 border border-red-100">
                 <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setIsTobi(!isTobi)}>
                     <div className={`w-5 h-5 border-2 rounded flex items-center justify-center ${isTobi ? 'bg-red-500 border-red-500 text-white' : 'border-gray-400 bg-white'}`}>
@@ -329,7 +337,7 @@ export default function DashboardPage() {
                 {isTobi && (
                     <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2">
                         <div>
-                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛んだ人 (Loser)</label>
+                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛んだ人</label>
                             <select 
                                 className="w-full p-2 border rounded-lg bg-white"
                                 value={tobiLoserId}
@@ -342,7 +350,7 @@ export default function DashboardPage() {
                             </select>
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛ばした人 (Winner)</label>
+                            <label className="text-xs font-bold text-gray-500 mb-1 block">飛ばした人</label>
                             <select 
                                 className="w-full p-2 border rounded-lg bg-white"
                                 value={tobiWinnerId}
