@@ -4,27 +4,25 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
-import { calculateRankChips, RANK_SCORE_BASE, calculateSplitScores } from '@/lib/gameLogic';
-import { RankType, GamePlayer } from '@/types'; // GamePlayerの型定義も必要ならインポート
+import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
+import { RankType, GamePlayer } from '@/types';
 import { Coins, Trophy, Calculator, X, Save, Settings, Undo2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { 
-  activePlayers, 
-  updateChip, 
-  updateRankAndScore, 
-  updateScore, 
-  resetGame, 
-  undo,       // 追加
-  history     // 追加 (ボタンの活性/非活性判定用)
-} = useGameStore();
+    activePlayers, 
+    updateChip, 
+    updateRankAndScore, 
+    updateScore, 
+    resetGame, 
+    undo,
+    history 
+  } = useGameStore();
   
-  // モーダル制御 ('none' | 'chip' | 'rank' | 'settlement' | 'adjust')
+  // モーダル制御
   const [modal, setModal] = useState<string>('none');
   const [saving, setSaving] = useState(false);
-  
-  // 調整用: どのプレイヤーを調整しているか
   const [adjustingPlayer, setAdjustingPlayer] = useState<GamePlayer | null>(null);
 
   // チップ・順位用のState
@@ -38,7 +36,6 @@ export default function DashboardPage() {
     if (activePlayers.length !== 4) router.push('/game/setup');
   }, [activePlayers, router]);
 
-  // --- ヘルパー: 収支計算 ---
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
 
   // --- チップ計算処理 ---
@@ -64,29 +61,19 @@ export default function DashboardPage() {
     setChipAmount(1);
   };
 
-  // --- 順位精算処理 ---
-const handleRankSubmit = () => {
+  // --- 順位精算処理 (同着対応版) ---
+  const handleRankSubmit = () => {
     if (Object.keys(rankSelection).length !== 4) return;
-    
     const selectedRanks = Object.values(rankSelection);
     
-    // チップ（ウマ）の計算
     const chipDeltas = calculateRankChips(selectedRanks);
-    
-    // ▼ 修正: 順位点（スコア）の計算（同着折半ロジックを使用）
     const scoreMap = calculateSplitScores(selectedRanks);
     
     activePlayers.forEach(p => {
       const rankStr = rankSelection[p.id];
-      
-      // チップ更新
       updateChip(p.id, chipDeltas[rankStr]);
-      
-      // 順位点更新 (scoreMapから計算済みの値を取得)
-      // 例: 浮き2着同士なら 0 が返ってくる
       updateRankAndScore(p.id, rankStr, scoreMap[rankStr]);
     });
-
     setModal('none');
     alert('順位とウマを反映しました。');
   };
@@ -117,7 +104,6 @@ const handleRankSubmit = () => {
     }
   };
 
-  // --- プレイヤーカードクリック時の処理 ---
   const openAdjustment = (player: GamePlayer) => {
     setAdjustingPlayer(player);
     setModal('adjust');
@@ -125,28 +111,26 @@ const handleRankSubmit = () => {
 
   return (
     <main className="min-h-screen bg-gray-100 p-4 pb-32">
-{/* ヘッダー */}
+      {/* ヘッダー */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold text-gray-700">対局中</h1>
         
         <div className="flex items-center gap-2">
-           {/* ▼ Undoボタン追加 */}
+           {/* Undoボタン */}
            <button 
              onClick={undo}
              disabled={history.length === 0}
              className="p-2 bg-gray-200 rounded-full text-gray-600 disabled:opacity-30 active:bg-gray-300 transition"
-             aria-label="元に戻す"
            >
              <Undo2 size={20} />
            </button>
-
            <div className="text-sm bg-white px-3 py-1 rounded-full shadow text-gray-500">
              合計: {activePlayers.reduce((sum, p) => sum + p.chip, 0)}
            </div>
         </div>
       </div>
 
-      {/* プレイヤーカード（クリック可能に変更） */}
+      {/* プレイヤーカード */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {activePlayers.map((p) => {
           const balance = calculateBalance(p);
@@ -156,11 +140,9 @@ const handleRankSubmit = () => {
               onClick={() => openAdjustment(p)}
               className="bg-white p-4 rounded-xl shadow-sm border-b-4 border-blue-500 flex flex-col items-center relative cursor-pointer active:scale-95 transition"
             >
-                {/* 右上：現在収支表示 (クリックで調整可能であることを示唆する設定アイコン等はあえて無くしシンプルに) */}
                 <span className={`absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded-full ${balance >= 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
                     {balance > 0 ? '+' : ''}{balance.toLocaleString()}
                 </span>
-
                 <span className="text-gray-500 text-sm mb-1">{p.name}</span>
                 <div className="flex items-baseline gap-1">
                     <span className={`text-4xl font-bold ${p.chip >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
@@ -168,7 +150,6 @@ const handleRankSubmit = () => {
                     </span>
                     <span className="text-xs text-gray-400">枚</span>
                 </div>
-                {/* 順位点スコア表示 */}
                 <span className="text-xs text-gray-400 mt-1">
                    順位点: {p.score > 0 ? '+' : ''}{p.score}
                 </span>
@@ -177,7 +158,7 @@ const handleRankSubmit = () => {
         })}
       </div>
 
-      {/* フッター操作ボタン */}
+      {/* フッター */}
       <div className="fixed bottom-0 left-0 w-full p-4 bg-white border-t flex justify-around items-center shadow-lg z-10">
         <button onClick={() => setModal('chip')} className="flex flex-col items-center text-blue-600 gap-1 active:scale-95 transition">
           <div className="p-3 bg-blue-100 rounded-full"><Coins /></div>
@@ -193,7 +174,7 @@ const handleRankSubmit = () => {
         </button>
       </div>
 
-      {/* --- モーダル: 個別調整 (New) --- */}
+      {/* モーダル: 個別調整 */}
       {modal === 'adjust' && adjustingPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -203,52 +184,26 @@ const handleRankSubmit = () => {
                     </h2>
                     <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
                 </div>
-
-                {/* チップ調整 */}
                 <div className="mb-6">
-                    <p className="text-sm font-bold text-gray-500 mb-2">チップ枚数 (現在: {activePlayers.find(p => p.id === adjustingPlayer.id)?.chip})</p>
+                    <p className="text-sm font-bold text-gray-500 mb-2">チップ枚数</p>
                     <div className="flex gap-4">
-                        <button 
-                            onClick={() => updateChip(adjustingPlayer.id, -1)}
-                            className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg active:bg-red-200"
-                        >-1</button>
-                        <button 
-                            onClick={() => updateChip(adjustingPlayer.id, 1)}
-                            className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg active:bg-blue-200"
-                        >+1</button>
+                        <button onClick={() => updateChip(adjustingPlayer.id, -1)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-1</button>
+                        <button onClick={() => updateChip(adjustingPlayer.id, 1)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+1</button>
                     </div>
                 </div>
-
-                {/* 順位点調整 */}
                 <div className="mb-6">
-                    <p className="text-sm font-bold text-gray-500 mb-2">順位点 (現在: {activePlayers.find(p => p.id === adjustingPlayer.id)?.score})</p>
+                    <p className="text-sm font-bold text-gray-500 mb-2">順位点</p>
                     <div className="flex gap-4">
-                        <button 
-                            onClick={() => updateScore(adjustingPlayer.id, -10)}
-                            className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg active:bg-red-200"
-                        >-10</button>
-                        <button 
-                            onClick={() => updateScore(adjustingPlayer.id, 10)}
-                            className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg active:bg-blue-200"
-                        >+10</button>
+                        <button onClick={() => updateScore(adjustingPlayer.id, -10)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-10</button>
+                        <button onClick={() => updateScore(adjustingPlayer.id, 10)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+10</button>
                     </div>
                 </div>
-
-                <div className="bg-gray-50 p-3 rounded-lg text-center">
-                    <p className="text-xs text-gray-500">現在収支</p>
-                    <p className="font-bold text-xl text-gray-700">
-                        {calculateBalance(activePlayers.find(p => p.id === adjustingPlayer.id)!).toLocaleString()} pt
-                    </p>
-                </div>
-
-                <button onClick={() => setModal('none')} className="w-full mt-6 py-3 bg-gray-800 text-white rounded-xl font-bold">
-                    閉じる
-                </button>
+                <button onClick={() => setModal('none')} className="w-full mt-6 py-3 bg-gray-800 text-white rounded-xl font-bold">閉じる</button>
             </div>
         </div>
       )}
 
-      {/* --- 既存モーダル (チップ) --- */}
+      {/* モーダル: チップ */}
       {modal === 'chip' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -256,7 +211,6 @@ const handleRankSubmit = () => {
               <h2 className="text-xl font-bold flex items-center gap-2"><Coins /> チップ移動</h2>
               <button onClick={closeChipModal}><X className="text-gray-400" /></button>
             </div>
-            {/* チップUI 省略なしで記述 */}
             <div className="flex bg-gray-100 p-1 rounded-lg mb-6">
               <button className={`flex-1 py-2 rounded-md font-bold transition-all ${chipAction === 'tsumo' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`} onClick={() => setChipAction('tsumo')}>ツモ</button>
               <button className={`flex-1 py-2 rounded-md font-bold transition-all ${chipAction === 'ron' ? 'bg-white shadow text-red-600' : 'text-gray-500'}`} onClick={() => setChipAction('ron')}>ロン</button>
@@ -286,7 +240,7 @@ const handleRankSubmit = () => {
         </div>
       )}
 
-      {/* --- 既存モーダル (順位) --- */}
+      {/* モーダル: 順位 */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -315,7 +269,7 @@ const handleRankSubmit = () => {
         </div>
       )}
 
-      {/* --- 既存モーダル (最終精算) --- */}
+      {/* モーダル: 最終精算 */}
       {modal === 'settlement' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
