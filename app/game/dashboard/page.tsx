@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
 import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types';
-import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -20,9 +20,6 @@ export default function DashboardPage() {
     history 
   } = useGameStore();
   
-  // 読み込み待ちフラグ
-  const [isLoaded, setIsLoaded] = useState(false);
-
   // モーダル制御
   const [modal, setModal] = useState<string>('none');
   const [saving, setSaving] = useState(false);
@@ -40,33 +37,19 @@ export default function DashboardPage() {
   const [tobiLoserId, setTobiLoserId] = useState('');
   const [tobiWinnerId, setTobiWinnerId] = useState('');
 
-  // ▼ データ復元と待機処理 ▼
+  // ▼▼▼ 追加: 画面が表示されたら、保存されたデータを読み込む ▼▼▼
   useEffect(() => {
-    // データを復元し、終わったらロード完了とする
-    useGameStore.persist.rehydrate().then(() => {
-      setIsLoaded(true);
-    });
+    useGameStore.persist.rehydrate();
   }, []);
+  // ▲▲▲ 追加終わり ▲▲▲
 
-  // ▼ ロード完了後に人数チェックを行う ▼
   useEffect(() => {
-    if (isLoaded && activePlayers.length !== 4) {
-        // ロードが終わったのにプレイヤーがいない場合はセットアップへ戻す
+    // データ読み込み完了後、なおかつプレイヤーがいなければセットアップへ
+    // (hasHydratedチェックを入れるとより安全ですが、一旦簡易的にチェック)
+    if (useGameStore.persist.hasHydrated() && activePlayers.length !== 4) {
         router.push('/game/setup');
     }
-  }, [isLoaded, activePlayers, router]);
-
-  // ▼ ロード中はローディング画面を表示（これが無いと一瞬リダイレクトされる） ▼
-  if (!isLoaded) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="flex flex-col items-center gap-2 text-gray-500">
-          <Loader2 className="animate-spin" size={32} />
-          <p>データを復元中...</p>
-        </div>
-      </div>
-    );
-  }
+  }, [activePlayers, router]);
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
   const rankToNumber = (rank: string): number => {
@@ -146,11 +129,9 @@ export default function DashboardPage() {
     updateAllPlayers(newPlayers);
     
     setModal('none');
-    // リセット
     setIsTobi(false);
     setTobiLoserId('');
     setTobiWinnerId('');
-    setRankSelection({}); // 順位選択もリセットした方が親切かも（任意）
     
     alert('順位・ウマ・飛び賞を反映しました。');
   };
@@ -176,7 +157,7 @@ export default function DashboardPage() {
         setSaving(false);
     } else {
         alert('保存完了！');
-        resetGame(); // ここでデータが消えるので、自動的にSetupへ戻る
+        resetGame();
         router.push('/');
     }
   };
@@ -315,7 +296,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: 順位精算 (飛び対応) */}
+      {/* モーダル: 順位精算 */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -323,6 +304,7 @@ export default function DashboardPage() {
               <h2 className="text-xl font-bold flex items-center gap-2"><Trophy /> 順位精算</h2>
               <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
             </div>
+
             <div className="space-y-4 mb-6">
               {activePlayers.map(p => (
                 <div key={p.id} className="flex flex-col gap-1">
@@ -340,7 +322,7 @@ export default function DashboardPage() {
               ))}
             </div>
 
-            {/* 飛び賞 */}
+            {/* 飛び賞の設定エリア */}
             <div className="bg-red-50 p-4 rounded-xl mb-6 border border-red-100">
                 <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setIsTobi(!isTobi)}>
                     <div className={`w-5 h-5 border-2 rounded flex items-center justify-center ${isTobi ? 'bg-red-500 border-red-500 text-white' : 'border-gray-400 bg-white'}`}>
