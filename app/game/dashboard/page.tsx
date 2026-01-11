@@ -4,13 +4,21 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
-import { calculateRankChips, RANK_SCORE_BASE } from '@/lib/gameLogic';
+import { calculateRankChips, RANK_SCORE_BASE, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types'; // GamePlayerの型定義も必要ならインポート
-import { Coins, Trophy, Calculator, X, Save, Settings } from 'lucide-react';
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { activePlayers, updateChip, updateRankAndScore, updateScore, resetGame } = useGameStore();
+  const { 
+  activePlayers, 
+  updateChip, 
+  updateRankAndScore, 
+  updateScore, 
+  resetGame, 
+  undo,       // 追加
+  history     // 追加 (ボタンの活性/非活性判定用)
+} = useGameStore();
   
   // モーダル制御 ('none' | 'chip' | 'rank' | 'settlement' | 'adjust')
   const [modal, setModal] = useState<string>('none');
@@ -57,16 +65,28 @@ export default function DashboardPage() {
   };
 
   // --- 順位精算処理 ---
-  const handleRankSubmit = () => {
+const handleRankSubmit = () => {
     if (Object.keys(rankSelection).length !== 4) return;
+    
     const selectedRanks = Object.values(rankSelection);
+    
+    // チップ（ウマ）の計算
     const chipDeltas = calculateRankChips(selectedRanks);
+    
+    // ▼ 修正: 順位点（スコア）の計算（同着折半ロジックを使用）
+    const scoreMap = calculateSplitScores(selectedRanks);
     
     activePlayers.forEach(p => {
       const rankStr = rankSelection[p.id];
+      
+      // チップ更新
       updateChip(p.id, chipDeltas[rankStr]);
-      updateRankAndScore(p.id, rankStr, RANK_SCORE_BASE[rankStr]);
+      
+      // 順位点更新 (scoreMapから計算済みの値を取得)
+      // 例: 浮き2着同士なら 0 が返ってくる
+      updateRankAndScore(p.id, rankStr, scoreMap[rankStr]);
     });
+
     setModal('none');
     alert('順位とウマを反映しました。');
   };
@@ -105,11 +125,24 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-gray-100 p-4 pb-32">
-      {/* ヘッダー */}
+{/* ヘッダー */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold text-gray-700">対局中</h1>
-        <div className="text-sm bg-white px-3 py-1 rounded-full shadow text-gray-500">
-          合計チップ: {activePlayers.reduce((sum, p) => sum + p.chip, 0)}
+        
+        <div className="flex items-center gap-2">
+           {/* ▼ Undoボタン追加 */}
+           <button 
+             onClick={undo}
+             disabled={history.length === 0}
+             className="p-2 bg-gray-200 rounded-full text-gray-600 disabled:opacity-30 active:bg-gray-300 transition"
+             aria-label="元に戻す"
+           >
+             <Undo2 size={20} />
+           </button>
+
+           <div className="text-sm bg-white px-3 py-1 rounded-full shadow text-gray-500">
+             合計: {activePlayers.reduce((sum, p) => sum + p.chip, 0)}
+           </div>
         </div>
       </div>
 
