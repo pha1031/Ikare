@@ -13,8 +13,8 @@ export default function DashboardPage() {
   const { 
     activePlayers, 
     updateChip, 
-    updateRankAndScore, 
     updateScore, 
+    updateAllPlayers, // ▼ 追加
     resetGame, 
     undo,
     history 
@@ -38,19 +38,34 @@ export default function DashboardPage() {
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
 
-  // --- チップ計算処理 ---
+  // --- ヘルパー: 順位文字列を数値に変換 ---
+  const rankToNumber = (rank: string): number => {
+    if (rank.includes('1')) return 1;
+    if (rank.includes('2')) return 2;
+    if (rank.includes('3')) return 3;
+    if (rank.includes('4')) return 4;
+    return 0;
+  };
+
+  // --- チップ計算処理 (一括更新版) ---
   const handleChipSubmit = () => {
     if (!winnerId || chipAmount <= 0) return;
-    if (chipAction === 'tsumo') {
-      activePlayers.forEach(p => {
-        if (p.id === winnerId) updateChip(p.id, chipAmount * 3);
-        else updateChip(p.id, -chipAmount);
-      });
-    } else {
-      if (!loserId || winnerId === loserId) return;
-      updateChip(winnerId, chipAmount);
-      updateChip(loserId, -chipAmount);
-    }
+
+    // 現在の状態をコピーして計算
+    const newPlayers = activePlayers.map(p => {
+      let change = 0;
+      if (chipAction === 'tsumo') {
+        if (p.id === winnerId) change = chipAmount * 3;
+        else change = -chipAmount;
+      } else {
+        if (p.id === winnerId) change = chipAmount;
+        if (p.id === loserId) change = -chipAmount;
+      }
+      return { ...p, chip: p.chip + change };
+    });
+
+    // 一括更新 (これでUndo履歴が1つになる)
+    updateAllPlayers(newPlayers);
     closeChipModal();
   };
 
@@ -61,7 +76,7 @@ export default function DashboardPage() {
     setChipAmount(1);
   };
 
-  // --- 順位精算処理 (同着対応版) ---
+  // --- 順位精算処理 (一括更新版) ---
   const handleRankSubmit = () => {
     if (Object.keys(rankSelection).length !== 4) return;
     const selectedRanks = Object.values(rankSelection);
@@ -69,11 +84,23 @@ export default function DashboardPage() {
     const chipDeltas = calculateRankChips(selectedRanks);
     const scoreMap = calculateSplitScores(selectedRanks);
     
-    activePlayers.forEach(p => {
+    // 現在の状態をコピーして計算
+    const newPlayers = activePlayers.map(p => {
       const rankStr = rankSelection[p.id];
-      updateChip(p.id, chipDeltas[rankStr]);
-      updateRankAndScore(p.id, rankStr, scoreMap[rankStr]);
+      const chipChange = chipDeltas[rankStr];
+      const scoreChange = scoreMap[rankStr];
+
+      return {
+        ...p,
+        chip: p.chip + chipChange,
+        score: p.score + scoreChange,
+        rank: rankToNumber(rankStr)
+      };
     });
+
+    // 一括更新 (これでUndo履歴が1つになる)
+    updateAllPlayers(newPlayers);
+    
     setModal('none');
     alert('順位とウマを反映しました。');
   };
@@ -116,7 +143,6 @@ export default function DashboardPage() {
         <h1 className="text-xl font-bold text-gray-700">対局中</h1>
         
         <div className="flex items-center gap-2">
-           {/* Undoボタン */}
            <button 
              onClick={undo}
              disabled={history.length === 0}
@@ -174,7 +200,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* モーダル: 個別調整 */}
+      {/* モーダル群 (変更なし) */}
       {modal === 'adjust' && adjustingPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -202,8 +228,6 @@ export default function DashboardPage() {
             </div>
         </div>
       )}
-
-      {/* モーダル: チップ */}
       {modal === 'chip' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -239,8 +263,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
-      {/* モーダル: 順位 */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -268,8 +290,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
-      {/* モーダル: 最終精算 */}
       {modal === 'settlement' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">

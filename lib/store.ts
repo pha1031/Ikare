@@ -3,19 +3,19 @@ import { GamePlayer, Player, RankType } from '@/types';
 
 type GameState = {
   activePlayers: GamePlayer[];
-  history: GamePlayer[][]; // 履歴保存用
+  history: GamePlayer[][];
   
   setPlayers: (players: Player[]) => void;
   updateChip: (playerId: string, amount: number) => void;
   updateRankAndScore: (playerId: string, rank: RankType, score: number) => void;
   updateScore: (playerId: string, amount: number) => void;
-  undo: () => void; // 元に戻す関数
+  // ▼ 追加: 全員まとめて更新する関数 (Undo対策)
+  updateAllPlayers: (players: GamePlayer[]) => void; 
+  undo: () => void;
   resetGame: () => void;
 };
 
-// ヘルパー: 状態変更前に履歴にプッシュする
 const saveHistory = (state: GameState) => {
-  // 履歴は最大10件まで保持（メモリ節約のため）
   const newHistory = [...state.history, state.activePlayers].slice(-10);
   return { history: newHistory };
 };
@@ -28,11 +28,11 @@ export const useGameStore = create<GameState>((set) => ({
     activePlayers: players.map(p => ({
       ...p, score: 0, chip: 0, rank: null
     })),
-    history: [] // ゲーム開始時に履歴リセット
+    history: []
   })),
 
   updateChip: (playerId, amount) => set((state) => ({
-    ...saveHistory(state), // 変更前に保存
+    ...saveHistory(state),
     activePlayers: state.activePlayers.map(p => 
       p.id === playerId ? { ...p, chip: p.chip + amount } : p
     )
@@ -52,13 +52,16 @@ export const useGameStore = create<GameState>((set) => ({
     )
   })),
 
-  // ▼ Undo機能
+  // ▼ 追加: 一括更新の実装
+  updateAllPlayers: (players) => set((state) => ({
+    ...saveHistory(state), // ここで履歴保存は1回だけ行われる
+    activePlayers: players
+  })),
+
   undo: () => set((state) => {
-    if (state.history.length === 0) return {}; // 履歴がなければ何もしない
-    
+    if (state.history.length === 0) return {};
     const previousPlayers = state.history[state.history.length - 1];
     const newHistory = state.history.slice(0, -1);
-    
     return {
       activePlayers: previousPlayers,
       history: newHistory
