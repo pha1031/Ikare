@@ -1,148 +1,217 @@
-"use client"; // ユーザー操作（入力やクリック）があるため必須
+"use client";
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { useGameStore } from '@/lib/store';
+import { useGameStore, GameMode } from '@/lib/store';
 import { Player } from '@/types';
-import { UserPlus, Users, Check, ArrowRight } from 'lucide-react';
+import { ArrowRight, UserPlus, Users, User, CheckCircle2 } from 'lucide-react';
 
 export default function SetupPage() {
   const router = useRouter();
-  const setPlayers = useGameStore((state) => state.setPlayers);
+  const { setPlayers, setGameMode, setSittingOut } = useGameStore();
+  
+  // ステップ管理: 'mode' (人数選択) -> 'players' (メンバー選択)
+  const [step, setStep] = useState<'mode' | 'players'>('mode');
+  const [selectedMode, setSelectedMode] = useState<GameMode>('4ma');
 
-  // 状態管理（React State）
-  const [players, setPlayersList] = useState<Player[]>([]); // 全プレイヤーリスト
-  const [selectedIds, setSelectedIds] = useState<string[]>([]); // 選択中のIDリスト
-  const [newName, setNewName] = useState(''); // 新規登録用の入力欄
-  const [loading, setLoading] = useState(false);
+  const [players, setPlayersList] = useState<Player[]>([]);
+  const [newPlayerName, setNewPlayerName] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // 画面が表示されたらデータベースからプレイヤー一覧を取得
+  // DBからプレイヤー一覧を取得
   useEffect(() => {
+    const fetchPlayers = async () => {
+      const { data, error } = await supabase.from('players').select('*').order('name');
+      if (!error && data) setPlayersList(data);
+      setLoading(false);
+    };
     fetchPlayers();
   }, []);
 
-  const fetchPlayers = async () => {
-    // Supabaseからデータを取得（作成日順）
+  // 新規プレイヤー登録
+  const handleAddPlayer = async () => {
+    if (!newPlayerName.trim()) return;
     const { data, error } = await supabase
       .from('players')
-      .select('*')
-      .order('created_at', { ascending: true });
+      .insert([{ name: newPlayerName }])
+      .select()
+      .single();
 
     if (error) {
-      console.error('Error fetching players:', error);
-    } else {
-      setPlayersList(data || []);
+      alert('エラー: ' + error.message);
+    } else if (data) {
+      setPlayersList([...players, data]);
+      setNewPlayerName('');
+      // 自動選択
+      const maxPlayers = selectedMode === '5ma' ? 5 : 4;
+      if (selectedIds.length < maxPlayers) {
+        setSelectedIds([...selectedIds, data.id]);
+      }
     }
   };
 
-  // プレイヤー新規登録処理
-  const handleAddPlayer = async () => {
-    if (!newName.trim()) return;
-    setLoading(true);
-
-    const { error } = await supabase
-      .from('players')
-      .insert([{ name: newName }]);
-
-    if (error) {
-      alert('登録エラーが発生しました');
-      console.error(error);
-    } else {
-      setNewName(''); // 入力欄をクリア
-      fetchPlayers(); // リストを再取得
-    }
-    setLoading(false);
-  };
-
-  // プレイヤー選択の切り替え処理
+  // プレイヤー選択の切り替え
   const toggleSelection = (id: string) => {
+    const maxPlayers = selectedMode === '5ma' ? 5 : 4;
     if (selectedIds.includes(id)) {
-      // 既に選択されていたら解除
       setSelectedIds(selectedIds.filter(pid => pid !== id));
     } else {
-      // 選択されていなければ追加（ただし4人まで）
-      if (selectedIds.length < 4) {
+      if (selectedIds.length < maxPlayers) {
         setSelectedIds([...selectedIds, id]);
       }
     }
   };
 
-  // 対局開始処理
+  // ゲーム開始
   const handleStartGame = () => {
-    if (selectedIds.length !== 4) return;
-
-    // 選択されたIDからプレイヤーオブジェクトを抽出
     const selectedPlayers = players.filter(p => selectedIds.includes(p.id));
     
-    // ストア（グローバル変数）に保存
+    // Storeに保存
+    setGameMode(selectedMode);
     setPlayers(selectedPlayers);
 
-    // 対局画面へ移動
+    // 5人打ちの場合、とりあえず最後の1人を初期抜け番にする（あとで変えられる）
+    if (selectedMode === '5ma') {
+       setSittingOut(selectedPlayers[4].id);
+    } else {
+       setSittingOut(null);
+    }
+
     router.push('/game/dashboard');
   };
 
+  // --- モード選択画面 ---
+  if (step === 'mode') {
+    return (
+      <main className="min-h-screen bg-gray-50 p-6 flex flex-col items-center justify-center">
+        <h1 className="text-2xl font-bold text-gray-800 mb-8">対局モードを選択</h1>
+        
+        <div className="space-y-4 w-full max-w-md">
+          {/* 4人打ち */}
+          <button 
+            onClick={() => { setSelectedMode('4ma'); setStep('players'); }}
+            className="w-full bg-white p-6 rounded-2xl shadow-sm border-2 border-blue-100 hover:border-blue-500 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-blue-100 rounded-full text-blue-600">
+                <Users size={24} />
+              </div>
+              <div className="text-left">
+                <span className="block text-lg font-bold text-gray-800">4人打ち</span>
+                <span className="text-sm text-gray-500">通常の対局</span>
+              </div>
+            </div>
+            <ArrowRight className="text-gray-300 group-hover:text-blue-500" />
+          </button>
+
+          {/* 5人打ち */}
+          <button 
+            onClick={() => { setSelectedMode('5ma'); setStep('players'); }}
+            className="w-full bg-white p-6 rounded-2xl shadow-sm border-2 border-green-100 hover:border-green-500 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-green-100 rounded-full text-green-600">
+                <Users size={24} />
+              </div>
+              <div className="text-left">
+                <span className="block text-lg font-bold text-gray-800">5人打ち</span>
+                <span className="text-sm text-gray-500">抜け番あり</span>
+              </div>
+            </div>
+            <ArrowRight className="text-gray-300 group-hover:text-green-500" />
+          </button>
+
+          {/* 3人打ち (Coming Soon) */}
+          <button 
+            disabled
+            className="w-full bg-gray-100 p-6 rounded-2xl border-2 border-transparent flex items-center justify-between opacity-60 cursor-not-allowed"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-gray-200 rounded-full text-gray-400">
+                <User size={24} />
+              </div>
+              <div className="text-left">
+                <span className="block text-lg font-bold text-gray-400">3人打ち</span>
+                <span className="text-xs font-bold bg-gray-300 text-gray-600 px-2 py-1 rounded mt-1 inline-block">Coming Soon</span>
+              </div>
+            </div>
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // --- プレイヤー選択画面 ---
+  const maxPlayers = selectedMode === '5ma' ? 5 : 4;
+  const isReady = selectedIds.length === maxPlayers;
+
   return (
-    <main className="min-h-screen bg-gray-50 p-6 pb-32">
-      <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
-        <Users className="text-blue-600" />
-        プレイヤー選択
-      </h1>
+    <main className="min-h-screen bg-gray-50 p-4 pb-32">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">
+          プレイヤー選択 
+          <span className="text-sm font-normal text-gray-500 ml-2">
+            ({selectedMode === '5ma' ? '5人' : '4人'}選んでください)
+          </span>
+        </h1>
+        <button onClick={() => setStep('mode')} className="text-sm text-blue-600 underline">戻る</button>
+      </div>
 
       {/* 新規登録フォーム */}
       <div className="bg-white p-4 rounded-xl shadow-sm mb-6 flex gap-2">
-        <input
-          type="text"
-          placeholder="新規プレイヤー名"
-          className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:border-blue-500"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
+        <input 
+          type="text" 
+          value={newPlayerName}
+          onChange={(e) => setNewPlayerName(e.target.value)}
+          placeholder="新しいプレイヤー名"
+          className="flex-1 border-gray-300 rounded-lg border px-3 py-2"
         />
         <button 
           onClick={handleAddPlayer}
-          disabled={loading || !newName}
-          className="bg-green-600 text-white p-3 rounded-lg disabled:opacity-50"
+          disabled={!newPlayerName.trim()}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold disabled:bg-gray-300"
         >
-          <UserPlus size={24} />
+          <UserPlus size={20} />
         </button>
       </div>
 
       {/* プレイヤーリスト */}
-      <div className="grid grid-cols-2 gap-3">
-        {players.map((player) => {
-          const isSelected = selectedIds.includes(player.id);
-          return (
-            <div
-              key={player.id}
-              onClick={() => toggleSelection(player.id)}
-              className={`
-                p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between
-                ${isSelected 
-                  ? 'border-blue-600 bg-blue-50 text-blue-800' 
-                  : 'border-gray-200 bg-white text-gray-700'}
-              `}
-            >
-              <span className="font-bold">{player.name}</span>
-              {isSelected && <Check size={20} className="text-blue-600" />}
-            </div>
-          );
-        })}
-      </div>
+      {loading ? (
+        <p className="text-center text-gray-500">読み込み中...</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {players.map(p => {
+            const isSelected = selectedIds.includes(p.id);
+            return (
+              <button
+                key={p.id}
+                onClick={() => toggleSelection(p.id)}
+                className={`p-4 rounded-xl border-2 text-left transition-all relative ${
+                  isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'
+                }`}
+              >
+                <span className={`font-bold ${isSelected ? 'text-blue-700' : 'text-gray-700'}`}>
+                  {p.name}
+                </span>
+                {isSelected && (
+                  <CheckCircle2 className="absolute top-2 right-2 text-blue-500" size={16} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {/* 開始ボタン（画面下部に固定） */}
-      <div className="fixed bottom-0 left-0 w-full p-6 bg-gradient-to-t from-white via-white to-transparent">
-        <button
+      {/* スタートボタン */}
+      <div className="fixed bottom-0 left-0 w-full p-4 bg-white border-t">
+        <button 
           onClick={handleStartGame}
-          disabled={selectedIds.length !== 4}
-          className={`
-            w-full py-4 rounded-2xl text-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all
-            ${selectedIds.length === 4 
-              ? 'bg-blue-600 text-white hover:bg-blue-700' 
-              : 'bg-gray-300 text-gray-500 cursor-not-allowed'}
-          `}
+          disabled={!isReady}
+          className="w-full bg-green-600 text-white py-4 rounded-xl font-bold text-lg disabled:bg-gray-300 disabled:text-gray-500 shadow-lg active:scale-95 transition"
         >
-          対局開始 ({selectedIds.length}/4)
-          <ArrowRight />
+          {selectedIds.length} / {maxPlayers} 人選択中 - 開局
         </button>
       </div>
     </main>

@@ -6,13 +6,15 @@ import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
 import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types';
-// ▼▼▼ Loader2 を追加しました ▼▼▼
-import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2, Coffee } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { 
-    activePlayers, 
+    gameMode,
+    activePlayers, // ここには全員(4or5人)が入っている
+    sittingOutId,
+    setSittingOut,
     updateChip, 
     updateScore, 
     updateAllPlayers,
@@ -21,7 +23,6 @@ export default function DashboardPage() {
     history 
   } = useGameStore();
   
-  // ▼▼▼ 読み込み待ちフラグ (初期値 false) ▼▼▼
   const [isLoaded, setIsLoaded] = useState(false);
 
   // モーダル制御
@@ -41,34 +42,34 @@ export default function DashboardPage() {
   const [tobiLoserId, setTobiLoserId] = useState('');
   const [tobiWinnerId, setTobiWinnerId] = useState('');
 
-  // ▼▼▼ 1. データ復元と待機処理 ▼▼▼
-// ▼▼▼ 1. データ復元と待機処理（修正版） ▼▼▼
+  // ▼ データ復元 ▼
   useEffect(() => {
-    // TypeScriptの型エラー回避のため as any を使用
     (useGameStore as any).persist.rehydrate()
       .then(() => setIsLoaded(true))
       .catch(() => setIsLoaded(true));
   }, []);
 
-  // ▼▼▼ 2. ロード完了後に人数チェックを行う ▼▼▼
+  // ▼ 人数チェック ▼
   useEffect(() => {
-    // ロードが終わった(isLoadedがtrue)のにプレイヤーがいない場合のみセットアップへ戻す
-    if (isLoaded && activePlayers.length !== 4) {
+    if (isLoaded) {
+      const requiredCount = gameMode === '5ma' ? 5 : 4;
+      if (activePlayers.length !== requiredCount) {
         router.push('/game/setup');
+      }
     }
-  }, [isLoaded, activePlayers, router]);
+  }, [isLoaded, activePlayers, gameMode, router]);
 
-  // ▼▼▼ 3. ロード中はローディング画面を表示 ▼▼▼
   if (!isLoaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="flex flex-col items-center gap-2 text-gray-500">
-          <Loader2 className="animate-spin" size={32} />
-          <p>データを復元中...</p>
-        </div>
+        <Loader2 className="animate-spin text-gray-400" size={32} />
       </div>
     );
   }
+
+  // --- ヘルパー: 対局中のメンバーのみ取得 ---
+  // 5人打ちなら抜け番以外、4人打ちなら全員
+  const playingMembers = activePlayers.filter(p => p.id !== sittingOutId);
 
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
   const rankToNumber = (rank: string): number => {
@@ -83,12 +84,18 @@ export default function DashboardPage() {
   const handleChipSubmit = () => {
     if (!winnerId || chipAmount <= 0) return;
 
+    // 全員(5人)に対してmapするが、抜け番の人は計算から除外(change=0)
     const newPlayers = activePlayers.map(p => {
+      // 抜け番なら何もしない
+      if (p.id === sittingOutId) return p;
+
       let change = 0;
       if (chipAction === 'tsumo') {
+        // ツモ: 勝者以外(対局中の3人)が払う
         if (p.id === winnerId) change = chipAmount * 3;
         else change = -chipAmount;
       } else {
+        // ロン: 勝者と敗者のみ動く
         if (p.id === winnerId) change = chipAmount;
         if (p.id === loserId) change = -chipAmount;
       }
@@ -106,32 +113,36 @@ export default function DashboardPage() {
     setChipAmount(1);
   };
 
-  // --- 順位精算処理 (飛び対応版) ---
+  // --- 順位精算処理 ---
   const handleRankSubmit = () => {
+    // 対局中の人数分(4人)の入力があるか
     if (Object.keys(rankSelection).length !== 4) return;
     
-    // 飛びのバリデーション
     if (isTobi) {
-        if (!tobiLoserId || !tobiWinnerId) {
-            alert('飛んだ人と飛ばした人を選択してください');
-            return;
-        }
-        if (tobiLoserId === tobiWinnerId) {
-            alert('飛んだ人と飛ばした人が同じです');
+        if (!tobiLoserId || !tobiWinnerId || tobiLoserId === tobiWinnerId) {
+            alert('飛びの設定を確認してください');
             return;
         }
     }
 
+    // 計算用: 選択されたランクの配列
     const selectedRanks = Object.values(rankSelection);
     const chipDeltas = calculateRankChips(selectedRanks);
     const scoreMap = calculateSplitScores(selectedRanks);
     
+    // 全員(5人)に対して更新
     const newPlayers = activePlayers.map(p => {
+      // 抜け番なら更新なし
+      if (p.id === sittingOutId) {
+        // 順位だけクリアしておく(バッジ表示のため)
+        return { ...p, rank: null }; 
+      }
+
       const rankStr = rankSelection[p.id];
       let chipChange = chipDeltas[rankStr];
       const scoreChange = scoreMap[rankStr];
 
-      // 飛び賞の計算
+      // 飛び賞
       if (isTobi) {
         if (p.id === tobiWinnerId) chipChange += 2;
         if (p.id === tobiLoserId) chipChange -= 2;
@@ -146,20 +157,26 @@ export default function DashboardPage() {
     });
 
     updateAllPlayers(newPlayers);
-    
     setModal('none');
-    // リセット
     setIsTobi(false);
     setTobiLoserId('');
     setTobiWinnerId('');
-    setRankSelection({}); 
+    setRankSelection({});
     
-    alert('順位・ウマ・飛び賞を反映しました。');
+    alert('反映しました');
   };
 
-  // --- 最終保存処理 ---
+  // --- 抜け番の交代処理 ---
+  const handleSwapSittingOut = (newSittingOutId: string) => {
+    if (!window.confirm('抜け番を交代しますか？')) return;
+    setSittingOut(newSittingOutId);
+    setModal('none'); // 調整モーダルを閉じる
+  };
+
+  // --- 保存処理 ---
   const handleGameSave = async () => {
     setSaving(true);
+    // 抜け番の人も含めて全員の結果を保存
     const resultsToSave = activePlayers.map(p => ({
         id: p.id,
         name: p.name,
@@ -170,7 +187,7 @@ export default function DashboardPage() {
     }));
 
     const { error } = await supabase.from('game_results').insert([
-        { results: resultsToSave, memo: '通常対局' }
+        { results: resultsToSave, memo: gameMode === '5ma' ? '5人打ち' : '通常対局' }
     ]);
 
     if (error) {
@@ -192,7 +209,7 @@ export default function DashboardPage() {
     <main className="min-h-screen bg-gray-100 p-4 pb-32">
       {/* ヘッダー */}
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-xl font-bold text-gray-700">対局中</h1>
+        <h1 className="text-xl font-bold text-gray-700">対局中 ({gameMode === '5ma' ? '5人' : '4人'})</h1>
         <div className="flex items-center gap-2">
            <button 
              onClick={undo}
@@ -207,19 +224,34 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* プレイヤーカード */}
+      {/* プレイヤーカード一覧 */}
+      {/* 5人の場合、レイアウトが崩れないようにgridを調整してもいいが、2列のままでもOK */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {activePlayers.map((p) => {
           const balance = calculateBalance(p);
+          const isSittingOut = p.id === sittingOutId;
+
           return (
             <div 
               key={p.id} 
               onClick={() => openAdjustment(p)}
-              className="bg-white p-4 rounded-xl shadow-sm border-b-4 border-blue-500 flex flex-col items-center relative cursor-pointer active:scale-95 transition"
+              className={`
+                p-4 rounded-xl shadow-sm border-b-4 flex flex-col items-center relative cursor-pointer active:scale-95 transition
+                ${isSittingOut ? 'bg-gray-200 border-gray-400 opacity-80' : 'bg-white border-blue-500'}
+              `}
             >
+                {/* 抜け番バッジ */}
+                {isSittingOut && (
+                    <span className="absolute top-2 left-2 bg-gray-600 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                        <Coffee size={10} /> 抜け番
+                    </span>
+                )}
+
+                {/* 収支バッジ (抜け番でも表示はする) */}
                 <span className={`absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded-full ${balance >= 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
                     {balance > 0 ? '+' : ''}{balance.toLocaleString()}
                 </span>
+
                 <span className="text-gray-500 text-sm mb-1">{p.name}</span>
                 <div className="flex items-baseline gap-1">
                     <span className={`text-4xl font-bold ${p.chip >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
@@ -251,7 +283,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* モーダル: 個別調整 */}
+      {/* モーダル: 個別調整 + 抜け番交代 */}
       {modal === 'adjust' && adjustingPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -261,6 +293,24 @@ export default function DashboardPage() {
                     </h2>
                     <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
                 </div>
+
+                {/* 5人打ちで、かつ現在このプレイヤーが抜け番でないなら「抜け番にする」ボタンを表示 */}
+                {gameMode === '5ma' && adjustingPlayer.id !== sittingOutId && (
+                    <div className="mb-6 pb-6 border-b">
+                        <button 
+                            onClick={() => handleSwapSittingOut(adjustingPlayer.id)}
+                            className="w-full py-3 bg-gray-700 text-white font-bold rounded-xl flex items-center justify-center gap-2"
+                        >
+                            <Coffee size={20} />
+                            この人を「抜け番」にする
+                        </button>
+                        <p className="text-xs text-gray-400 mt-2 text-center">
+                            現在の抜け番({activePlayers.find(p => p.id === sittingOutId)?.name})が復帰します
+                        </p>
+                    </div>
+                )}
+
+                {/* チップ・順位点調整 (抜け番でも調整は可能にしておく) */}
                 <div className="mb-6">
                     <p className="text-sm font-bold text-gray-500 mb-2">チップ枚数</p>
                     <div className="flex gap-4">
@@ -280,7 +330,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: チップ */}
+      {/* モーダル: チップ (対局中のメンバーのみ表示) */}
       {modal === 'chip' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -299,14 +349,15 @@ export default function DashboardPage() {
             </div>
             <div className="space-y-4 mb-6">
               <div className="grid grid-cols-2 gap-2">
-                {activePlayers.map(p => (
+                {/* 対局中のメンバーのみ表示 */}
+                {playingMembers.map(p => (
                    <button key={p.id} onClick={() => setWinnerId(p.id)} className={`p-2 rounded-lg border-2 text-sm font-bold ${winnerId === p.id ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200'}`}>{p.name}</button>
                 ))}
               </div>
               {chipAction === 'ron' && (
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                     <p className="col-span-2 text-xs text-gray-400">放銃者</p>
-                    {activePlayers.map(p => (
+                    {playingMembers.map(p => (
                       <button key={p.id} disabled={winnerId === p.id} onClick={() => setLoserId(p.id)} className={`p-2 rounded-lg border-2 text-sm font-bold ${loserId === p.id ? 'border-red-500 bg-red-50 text-red-600' : 'border-gray-200 disabled:opacity-30'}`}>{p.name}</button>
                     ))}
                 </div>
@@ -317,7 +368,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: 順位精算 */}
+      {/* モーダル: 順位精算 (対局中のメンバーのみ表示) */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -327,7 +378,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-4 mb-6">
-              {activePlayers.map(p => (
+              {playingMembers.map(p => (
                 <div key={p.id} className="flex flex-col gap-1">
                   <label className="font-bold text-gray-700">{p.name}</label>
                   <select className="p-3 border rounded-lg bg-gray-50" value={rankSelection[p.id] || ''} onChange={(e) => setRankSelection({...rankSelection, [p.id]: e.target.value as RankType})}>
@@ -365,7 +416,7 @@ export default function DashboardPage() {
                                 onChange={(e) => setTobiLoserId(e.target.value)}
                             >
                                 <option value="">選択...</option>
-                                {activePlayers.map(p => (
+                                {playingMembers.map(p => (
                                     <option key={p.id} value={p.id} disabled={p.id === tobiWinnerId}>{p.name}</option>
                                 ))}
                             </select>
@@ -378,7 +429,7 @@ export default function DashboardPage() {
                                 onChange={(e) => setTobiWinnerId(e.target.value)}
                             >
                                 <option value="">選択...</option>
-                                {activePlayers.map(p => (
+                                {playingMembers.map(p => (
                                     <option key={p.id} value={p.id} disabled={p.id === tobiLoserId}>{p.name}</option>
                                 ))}
                             </select>
@@ -392,8 +443,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-
-      {/* モーダル: 最終精算 */}
+      {/* モーダル: 最終精算 (ここは全員表示) */}
       {modal === 'settlement' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -404,10 +454,14 @@ export default function DashboardPage() {
             <div className="space-y-4 mb-8">
                 {activePlayers.map(p => {
                     const total = calculateBalance(p);
+                    const isSittingOut = p.id === sittingOutId;
                     return (
-                        <div key={p.id} className="flex justify-between items-center border-b pb-2">
+                        <div key={p.id} className={`flex justify-between items-center border-b pb-2 ${isSittingOut ? 'opacity-50' : ''}`}>
                             <div>
-                                <span className="font-bold text-lg block">{p.name}</span>
+                                <span className="font-bold text-lg block flex items-center gap-2">
+                                    {p.name}
+                                    {isSittingOut && <Coffee size={14} />}
+                                </span>
                                 <span className="text-xs text-gray-400">
                                     チップ:{p.chip}枚 / 順位点:{p.score}
                                 </span>

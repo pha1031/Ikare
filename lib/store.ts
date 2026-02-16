@@ -1,12 +1,19 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware'; // 追加
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { GamePlayer, Player, RankType } from '@/types';
 
+// モードの型定義
+export type GameMode = '3ma' | '4ma' | '5ma';
+
 type GameState = {
-  activePlayers: GamePlayer[];
-  history: GamePlayer[][];
+  gameMode: GameMode;         // ▼ 追加: 3人/4人/5人打ち
+  activePlayers: GamePlayer[]; // 参加している全プレイヤー（5人打ちなら5人入る）
+  sittingOutId: string | null; // ▼ 追加: 抜け番のプレイヤーID
+  history: { players: GamePlayer[]; sittingOutId: string | null }[]; // 履歴も抜け番情報を保持するように変更
   
+  setGameMode: (mode: GameMode) => void; // ▼ 追加
   setPlayers: (players: Player[]) => void;
+  setSittingOut: (playerId: string | null) => void; // ▼ 追加
   updateChip: (playerId: string, amount: number) => void;
   updateRankAndScore: (playerId: string, rank: RankType, score: number) => void;
   updateScore: (playerId: string, amount: number) => void;
@@ -16,21 +23,35 @@ type GameState = {
 };
 
 const saveHistory = (state: GameState) => {
-  const newHistory = [...state.history, state.activePlayers].slice(-10);
+  // プレイヤー状態と抜け番状態の両方を履歴に残す
+  const newHistory = [...state.history, { 
+    players: state.activePlayers, 
+    sittingOutId: state.sittingOutId 
+  }].slice(-10);
   return { history: newHistory };
 };
 
 export const useGameStore = create<GameState>()(
   persist(
     (set) => ({
+      gameMode: '4ma', // デフォルト
       activePlayers: [],
+      sittingOutId: null,
       history: [],
+
+      setGameMode: (mode) => set(() => ({ gameMode: mode })),
 
       setPlayers: (players) => set(() => ({
         activePlayers: players.map(p => ({
           ...p, score: 0, chip: 0, rank: null
         })),
+        sittingOutId: null, // 初期化時は抜け番なし（あとで設定）
         history: []
+      })),
+
+      setSittingOut: (playerId) => set((state) => ({
+        ...saveHistory(state),
+        sittingOutId: playerId
       })),
 
       updateChip: (playerId, amount) => set((state) => ({
@@ -61,10 +82,11 @@ export const useGameStore = create<GameState>()(
 
       undo: () => set((state) => {
         if (state.history.length === 0) return {};
-        const previousPlayers = state.history[state.history.length - 1];
+        const previousState = state.history[state.history.length - 1];
         const newHistory = state.history.slice(0, -1);
         return {
-          activePlayers: previousPlayers,
+          activePlayers: previousState.players,
+          sittingOutId: previousState.sittingOutId,
           history: newHistory
         };
       }),
@@ -77,20 +99,18 @@ export const useGameStore = create<GameState>()(
       })),
     }),
     {
-      name: 'ikare-storage', // ブラウザに保存する名前
+      name: 'ikare-storage',
       storage: createJSONStorage(() => {
-        // ▼ ここが安全装置：ブラウザ(windowがある)時だけlocalStorageを使う
         if (typeof window !== 'undefined') {
           return localStorage;
         }
-        // サーバー側では何もしないダミーを返す
         return {
           getItem: () => null,
           setItem: () => {},
           removeItem: () => {},
         };
       }),
-      skipHydration: true, // エラー回避のため、最初はデータを読み込まずに開始する設定
+      skipHydration: true,
     }
   )
 );
