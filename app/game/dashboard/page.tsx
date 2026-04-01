@@ -6,24 +6,17 @@ import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/lib/store';
 import { calculateRankChips, calculateSplitScores } from '@/lib/gameLogic';
 import { RankType, GamePlayer } from '@/types';
-import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2, Coffee } from 'lucide-react';
+import { Coins, Trophy, Calculator, X, Save, Settings, Undo2, AlertTriangle, Loader2, Coffee, Copy, Check } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { 
-    gameMode,
-    activePlayers, // ここには全員(4or5人)が入っている
-    sittingOutId,
-    setSittingOut,
-    updateChip, 
-    updateScore, 
-    updateAllPlayers,
-    resetGame, 
-    undo,
-    history 
-  } = useGameStore();
   
+  // ZustandのStore（リアルタイム受信したデータを画面に反映するために使う）
+  const { gameMode, activePlayers, sittingOutId, history } = useGameStore();
+  
+  const [roomId, setRoomId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // モーダル制御
   const [modal, setModal] = useState<string>('none');
@@ -36,154 +29,200 @@ export default function DashboardPage() {
   const [winnerId, setWinnerId] = useState<string>('');
   const [loserId, setLoserId] = useState<string>('');
   
-  // 順位・飛び用のState
   const [rankSelection, setRankSelection] = useState<Record<string, RankType>>({});
   const [isTobi, setIsTobi] = useState(false);
   const [tobiLoserId, setTobiLoserId] = useState('');
   const [tobiWinnerId, setTobiWinnerId] = useState('');
 
-  // ▼ データ復元 ▼
+  // ▼ 1. URLからルームIDを取得する ▼
   useEffect(() => {
-    (useGameStore as any).persist.rehydrate()
-      .then(() => setIsLoaded(true))
-      .catch(() => setIsLoaded(true));
-  }, []);
-
-  // ▼ 人数チェック ▼
-  useEffect(() => {
-    if (isLoaded) {
-      const requiredCount = gameMode === '5ma' ? 5 : 4;
-      if (activePlayers.length !== requiredCount) {
-        router.push('/game/setup');
-      }
+    const params = new URLSearchParams(window.location.search);
+    const room = params.get('room');
+    if (!room) {
+      alert('ルームIDがありません。開局画面に戻ります。');
+      router.push('/game/setup');
+    } else {
+      setRoomId(room);
     }
-  }, [isLoaded, activePlayers, gameMode, router]);
+  }, [router]);
 
+  // ▼ 2. データの初回読み込み ＆ リアルタイム受信の設定 ▼
+  useEffect(() => {
+    if (!roomId) return;
+
+    const fetchAndSubscribe = async () => {
+      // サーバーから現在の部屋のデータを取得
+      const { data, error } = await supabase.from('active_games').select('*').eq('room_id', roomId).single();
+      
+      if (error || !data) {
+         alert('部屋が見つかりませんでした。すでに終了しているか、URLが間違っています。');
+         router.push('/game/setup');
+         return;
+      }
+
+      // 初回データをStoreにセット
+      useGameStore.setState({
+         gameMode: data.game_mode as any,
+         activePlayers: data.players_data,
+         sittingOutId: data.sitting_out_id,
+         history: data.history || []
+      });
+      setIsLoaded(true);
+
+      // ▼ 魔法のコード：リアルタイム同期の設定 ▼
+      const channel = supabase.channel(`room-${roomId}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'active_games', filter: `room_id=eq.${roomId}` },
+          (payload) => {
+            const newData = payload.new;
+            // 誰かがデータを更新したら、自分の画面（Store）も書き換える
+            useGameStore.setState({
+              gameMode: newData.game_mode,
+              activePlayers: newData.players_data,
+              sittingOutId: newData.sitting_out_id,
+              history: newData.history || []
+            });
+          }
+        )
+        .subscribe();
+
+      // 画面を閉じたら通信を切る
+      return () => { supabase.removeChannel(channel); };
+    };
+
+    fetchAndSubscribe();
+  }, [roomId, router]);
+
+  // ▼ 3. サーバーへデータを送信する共通関数 ▼
+  const applyStateChange = async (newPlayers: GamePlayer[], newSittingOutId: string | null) => {
+    if (!roomId) return;
+    
+    // 変更前の状態を履歴に追加
+    const newHistory = [...history, { players: activePlayers, sittingOutId }].slice(-10);
+
+    // 先に自分の画面を素早く書き換える（サクサク感を出すため）
+    useGameStore.setState({ activePlayers: newPlayers, sittingOutId: newSittingOutId, history: newHistory });
+
+    // サーバーへ送信（これが他の人に共有される）
+    await supabase.from('active_games').update({
+       players_data: newPlayers,
+       sitting_out_id: newSittingOutId,
+       history: newHistory,
+       updated_at: new Date().toISOString()
+    }).eq('room_id', roomId);
+  };
+
+  // --- ローディング画面 ---
   if (!isLoaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <Loader2 className="animate-spin text-gray-400" size={32} />
+        <div className="flex flex-col items-center gap-2 text-gray-500">
+          <Loader2 className="animate-spin" size={32} />
+          <p>対局データを同期中...</p>
+        </div>
       </div>
     );
   }
 
-  // --- ヘルパー: 対局中のメンバーのみ取得 ---
-  // 5人打ちなら抜け番以外、4人打ちなら全員
   const playingMembers = activePlayers.filter(p => p.id !== sittingOutId);
-
   const calculateBalance = (p: GamePlayer) => (p.chip * 80) + (p.score * 20);
   const rankToNumber = (rank: string): number => {
-    if (rank.includes('1')) return 1;
-    if (rank.includes('2')) return 2;
-    if (rank.includes('3')) return 3;
-    if (rank.includes('4')) return 4;
+    if (rank.includes('1')) return 1; if (rank.includes('2')) return 2;
+    if (rank.includes('3')) return 3; if (rank.includes('4')) return 4;
     return 0;
   };
 
-  // --- チップ計算処理 ---
+  // --- URLコピー機能 ---
+  const copyRoomUrl = () => {
+    const url = `${window.location.origin}/game/dashboard?room=${roomId}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // --- 各種操作処理（ローカル更新ではなくapplyStateChangeを使用） ---
   const handleChipSubmit = () => {
     if (!winnerId || chipAmount <= 0) return;
-
-    // 全員(5人)に対してmapするが、抜け番の人は計算から除外(change=0)
     const newPlayers = activePlayers.map(p => {
-      // 抜け番なら何もしない
       if (p.id === sittingOutId) return p;
-
       let change = 0;
       if (chipAction === 'tsumo') {
-        // ツモ: 勝者以外(対局中の3人)が払う
         if (p.id === winnerId) change = chipAmount * 3;
         else change = -chipAmount;
       } else {
-        // ロン: 勝者と敗者のみ動く
         if (p.id === winnerId) change = chipAmount;
         if (p.id === loserId) change = -chipAmount;
       }
       return { ...p, chip: p.chip + change };
     });
-
-    updateAllPlayers(newPlayers);
-    closeChipModal();
+    applyStateChange(newPlayers, sittingOutId);
+    setModal('none'); setWinnerId(''); setLoserId(''); setChipAmount(1);
   };
 
-  const closeChipModal = () => {
-    setModal('none');
-    setWinnerId('');
-    setLoserId('');
-    setChipAmount(1);
-  };
-
-  // --- 順位精算処理 ---
   const handleRankSubmit = () => {
-    // 対局中の人数分(4人)の入力があるか
     if (Object.keys(rankSelection).length !== 4) return;
-    
-    if (isTobi) {
-        if (!tobiLoserId || !tobiWinnerId || tobiLoserId === tobiWinnerId) {
-            alert('飛びの設定を確認してください');
-            return;
-        }
+    if (isTobi && (!tobiLoserId || !tobiWinnerId || tobiLoserId === tobiWinnerId)) {
+        alert('飛びの設定を確認してください'); return;
     }
 
-    // 計算用: 選択されたランクの配列
     const selectedRanks = Object.values(rankSelection);
     const chipDeltas = calculateRankChips(selectedRanks);
     const scoreMap = calculateSplitScores(selectedRanks);
     
-    // 全員(5人)に対して更新
     const newPlayers = activePlayers.map(p => {
-      // 抜け番なら更新なし
-      if (p.id === sittingOutId) {
-        // 順位だけクリアしておく(バッジ表示のため)
-        return { ...p, rank: null }; 
-      }
+      if (p.id === sittingOutId) return { ...p, rank: null }; 
 
       const rankStr = rankSelection[p.id];
       let chipChange = chipDeltas[rankStr];
       const scoreChange = scoreMap[rankStr];
 
-      // 飛び賞
       if (isTobi) {
         if (p.id === tobiWinnerId) chipChange += 2;
         if (p.id === tobiLoserId) chipChange -= 2;
       }
-
-      return {
-        ...p,
-        chip: p.chip + chipChange,
-        score: p.score + scoreChange,
-        rank: rankToNumber(rankStr)
-      };
+      return { ...p, chip: p.chip + chipChange, score: p.score + scoreChange, rank: rankToNumber(rankStr) };
     });
 
-    updateAllPlayers(newPlayers);
-    setModal('none');
-    setIsTobi(false);
-    setTobiLoserId('');
-    setTobiWinnerId('');
-    setRankSelection({});
-    
-    alert('反映しました');
+    applyStateChange(newPlayers, sittingOutId);
+    setModal('none'); setIsTobi(false); setTobiLoserId(''); setTobiWinnerId(''); setRankSelection({});
   };
 
-  // --- 抜け番の交代処理 ---
   const handleSwapSittingOut = (newSittingOutId: string) => {
     if (!window.confirm('抜け番を交代しますか？')) return;
-    setSittingOut(newSittingOutId);
-    setModal('none'); // 調整モーダルを閉じる
+    applyStateChange(activePlayers, newSittingOutId);
+    setModal('none');
   };
 
-  // --- 保存処理 ---
+  const adjustChip = (id: string, amount: number) => {
+    const newPlayers = activePlayers.map(p => p.id === id ? { ...p, chip: p.chip + amount } : p);
+    applyStateChange(newPlayers, sittingOutId);
+  };
+
+  const adjustScore = (id: string, amount: number) => {
+    const newPlayers = activePlayers.map(p => p.id === id ? { ...p, score: p.score + amount } : p);
+    applyStateChange(newPlayers, sittingOutId);
+  };
+
+  const handleUndo = async () => {
+    if (history.length === 0 || !roomId) return;
+    const previousState = history[history.length - 1];
+    const newHistory = history.slice(0, -1);
+
+    useGameStore.setState({ activePlayers: previousState.players, sittingOutId: previousState.sittingOutId, history: newHistory });
+
+    await supabase.from('active_games').update({
+       players_data: previousState.players,
+       sitting_out_id: previousState.sittingOutId,
+       history: newHistory,
+       updated_at: new Date().toISOString()
+    }).eq('room_id', roomId);
+  };
+
   const handleGameSave = async () => {
     setSaving(true);
-    // 抜け番の人も含めて全員の結果を保存
     const resultsToSave = activePlayers.map(p => ({
-        id: p.id,
-        name: p.name,
-        rank: p.rank,
-        chip: p.chip,
-        score: p.score,
-        total_yen: calculateBalance(p)
+        id: p.id, name: p.name, rank: p.rank, chip: p.chip, score: p.score, total_yen: calculateBalance(p)
     }));
 
     const { error } = await supabase.from('game_results').insert([
@@ -194,28 +233,30 @@ export default function DashboardPage() {
         alert('保存失敗: ' + error.message);
         setSaving(false);
     } else {
+        // オプション: 保存完了時に active_games から部屋を削除しても良いですが、今回はそのまま残します
         alert('保存完了！');
-        resetGame();
+        useGameStore.getState().resetGame();
         router.push('/');
     }
   };
 
-  const openAdjustment = (player: GamePlayer) => {
-    setAdjustingPlayer(player);
-    setModal('adjust');
-  };
-
   return (
     <main className="min-h-screen bg-gray-100 p-4 pb-32">
-      {/* ヘッダー */}
+      {/* 招待ヘッダー（新規追加） */}
+      <div className="flex justify-between items-center mb-2">
+         <div className="flex items-center gap-2">
+             <span className="text-xs font-bold text-gray-500 bg-gray-200 px-2 py-1 rounded">ID: {roomId}</span>
+         </div>
+         <button onClick={copyRoomUrl} className="text-blue-600 font-bold text-sm flex items-center gap-1 bg-blue-50 px-3 py-1 rounded-full active:scale-95 transition">
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+            {copied ? 'コピーしました' : '招待URLをコピー'}
+         </button>
+      </div>
+
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold text-gray-700">対局中 ({gameMode === '5ma' ? '5人' : '4人'})</h1>
         <div className="flex items-center gap-2">
-           <button 
-             onClick={undo}
-             disabled={history.length === 0}
-             className="p-2 bg-gray-200 rounded-full text-gray-600 disabled:opacity-30 active:bg-gray-300 transition"
-           >
+           <button onClick={handleUndo} disabled={history.length === 0} className="p-2 bg-gray-200 rounded-full text-gray-600 disabled:opacity-30 active:bg-gray-300 transition">
              <Undo2 size={20} />
            </button>
            <div className="text-sm bg-white px-3 py-1 rounded-full shadow text-gray-500">
@@ -225,43 +266,24 @@ export default function DashboardPage() {
       </div>
 
       {/* プレイヤーカード一覧 */}
-      {/* 5人の場合、レイアウトが崩れないようにgridを調整してもいいが、2列のままでもOK */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {activePlayers.map((p) => {
           const balance = calculateBalance(p);
           const isSittingOut = p.id === sittingOutId;
-
           return (
-            <div 
-              key={p.id} 
-              onClick={() => openAdjustment(p)}
-              className={`
-                p-4 rounded-xl shadow-sm border-b-4 flex flex-col items-center relative cursor-pointer active:scale-95 transition
-                ${isSittingOut ? 'bg-gray-200 border-gray-400 opacity-80' : 'bg-white border-blue-500'}
-              `}
-            >
-                {/* 抜け番バッジ */}
+            <div key={p.id} onClick={() => { setAdjustingPlayer(p); setModal('adjust'); }} className={`p-4 rounded-xl shadow-sm border-b-4 flex flex-col items-center relative cursor-pointer active:scale-95 transition ${isSittingOut ? 'bg-gray-200 border-gray-400 opacity-80' : 'bg-white border-blue-500'}`}>
                 {isSittingOut && (
-                    <span className="absolute top-2 left-2 bg-gray-600 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
-                        <Coffee size={10} /> 抜け番
-                    </span>
+                    <span className="absolute top-2 left-2 bg-gray-600 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1"><Coffee size={10} /> 抜け番</span>
                 )}
-
-                {/* 収支バッジ (抜け番でも表示はする) */}
                 <span className={`absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded-full ${balance >= 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
                     {balance > 0 ? '+' : ''}{balance.toLocaleString()}
                 </span>
-
                 <span className="text-gray-500 text-sm mb-1">{p.name}</span>
                 <div className="flex items-baseline gap-1">
-                    <span className={`text-4xl font-bold ${p.chip >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
-                    {p.chip > 0 ? '+' : ''}{p.chip}
-                    </span>
+                    <span className={`text-4xl font-bold ${p.chip >= 0 ? 'text-blue-600' : 'text-red-500'}`}>{p.chip > 0 ? '+' : ''}{p.chip}</span>
                     <span className="text-xs text-gray-400">枚</span>
                 </div>
-                <span className="text-xs text-gray-400 mt-1">
-                   順位点: {p.score > 0 ? '+' : ''}{p.score}
-                </span>
+                <span className="text-xs text-gray-400 mt-1">順位点: {p.score > 0 ? '+' : ''}{p.score}</span>
             </div>
           );
         })}
@@ -269,60 +291,36 @@ export default function DashboardPage() {
 
       {/* フッター */}
       <div className="fixed bottom-0 left-0 w-full p-4 bg-white border-t flex justify-around items-center shadow-lg z-10">
-        <button onClick={() => setModal('chip')} className="flex flex-col items-center text-blue-600 gap-1 active:scale-95 transition">
-          <div className="p-3 bg-blue-100 rounded-full"><Coins /></div>
-          <span className="text-xs font-bold">チップ</span>
-        </button>
-        <button onClick={() => setModal('rank')} className="flex flex-col items-center text-orange-600 gap-1 active:scale-95 transition">
-          <div className="p-3 bg-orange-100 rounded-full"><Trophy /></div>
-          <span className="text-xs font-bold">順位/ウマ</span>
-        </button>
-        <button onClick={() => setModal('settlement')} className="flex flex-col items-center text-green-600 gap-1 active:scale-95 transition">
-          <div className="p-3 bg-green-100 rounded-full"><Calculator /></div>
-          <span className="text-xs font-bold">精算/保存</span>
-        </button>
+        <button onClick={() => setModal('chip')} className="flex flex-col items-center text-blue-600 gap-1 active:scale-95 transition"><div className="p-3 bg-blue-100 rounded-full"><Coins /></div><span className="text-xs font-bold">チップ</span></button>
+        <button onClick={() => setModal('rank')} className="flex flex-col items-center text-orange-600 gap-1 active:scale-95 transition"><div className="p-3 bg-orange-100 rounded-full"><Trophy /></div><span className="text-xs font-bold">順位/ウマ</span></button>
+        <button onClick={() => setModal('settlement')} className="flex flex-col items-center text-green-600 gap-1 active:scale-95 transition"><div className="p-3 bg-green-100 rounded-full"><Calculator /></div><span className="text-xs font-bold">精算/保存</span></button>
       </div>
 
-      {/* モーダル: 個別調整 + 抜け番交代 */}
+      {/* モーダル群 */}
       {modal === 'adjust' && adjustingPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
                 <div className="flex justify-between mb-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2">
-                        <Settings /> {adjustingPlayer.name}の調整
-                    </h2>
+                    <h2 className="text-xl font-bold flex items-center gap-2"><Settings /> {adjustingPlayer.name}の調整</h2>
                     <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
                 </div>
-
-                {/* 5人打ちで、かつ現在このプレイヤーが抜け番でないなら「抜け番にする」ボタンを表示 */}
                 {gameMode === '5ma' && adjustingPlayer.id !== sittingOutId && (
                     <div className="mb-6 pb-6 border-b">
-                        <button 
-                            onClick={() => handleSwapSittingOut(adjustingPlayer.id)}
-                            className="w-full py-3 bg-gray-700 text-white font-bold rounded-xl flex items-center justify-center gap-2"
-                        >
-                            <Coffee size={20} />
-                            この人を「抜け番」にする
-                        </button>
-                        <p className="text-xs text-gray-400 mt-2 text-center">
-                            現在の抜け番({activePlayers.find(p => p.id === sittingOutId)?.name})が復帰します
-                        </p>
+                        <button onClick={() => handleSwapSittingOut(adjustingPlayer.id)} className="w-full py-3 bg-gray-700 text-white font-bold rounded-xl flex items-center justify-center gap-2"><Coffee size={20} />この人を「抜け番」にする</button>
                     </div>
                 )}
-
-                {/* チップ・順位点調整 (抜け番でも調整は可能にしておく) */}
                 <div className="mb-6">
                     <p className="text-sm font-bold text-gray-500 mb-2">チップ枚数</p>
                     <div className="flex gap-4">
-                        <button onClick={() => updateChip(adjustingPlayer.id, -1)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-1</button>
-                        <button onClick={() => updateChip(adjustingPlayer.id, 1)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+1</button>
+                        <button onClick={() => adjustChip(adjustingPlayer.id, -1)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-1</button>
+                        <button onClick={() => adjustChip(adjustingPlayer.id, 1)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+1</button>
                     </div>
                 </div>
                 <div className="mb-6">
                     <p className="text-sm font-bold text-gray-500 mb-2">順位点</p>
                     <div className="flex gap-4">
-                        <button onClick={() => updateScore(adjustingPlayer.id, -10)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-10</button>
-                        <button onClick={() => updateScore(adjustingPlayer.id, 10)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+10</button>
+                        <button onClick={() => adjustScore(adjustingPlayer.id, -10)} className="flex-1 py-3 bg-red-100 text-red-600 font-bold rounded-lg">-10</button>
+                        <button onClick={() => adjustScore(adjustingPlayer.id, 10)} className="flex-1 py-3 bg-blue-100 text-blue-600 font-bold rounded-lg">+10</button>
                     </div>
                 </div>
                 <button onClick={() => setModal('none')} className="w-full mt-6 py-3 bg-gray-800 text-white rounded-xl font-bold">閉じる</button>
@@ -330,13 +328,12 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: チップ (対局中のメンバーのみ表示) */}
       {modal === 'chip' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
             <div className="flex justify-between mb-6">
               <h2 className="text-xl font-bold flex items-center gap-2"><Coins /> チップ移動</h2>
-              <button onClick={closeChipModal}><X className="text-gray-400" /></button>
+              <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
             </div>
             <div className="flex bg-gray-100 p-1 rounded-lg mb-6">
               <button className={`flex-1 py-2 rounded-md font-bold transition-all ${chipAction === 'tsumo' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`} onClick={() => setChipAction('tsumo')}>ツモ</button>
@@ -349,7 +346,6 @@ export default function DashboardPage() {
             </div>
             <div className="space-y-4 mb-6">
               <div className="grid grid-cols-2 gap-2">
-                {/* 対局中のメンバーのみ表示 */}
                 {playingMembers.map(p => (
                    <button key={p.id} onClick={() => setWinnerId(p.id)} className={`p-2 rounded-lg border-2 text-sm font-bold ${winnerId === p.id ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200'}`}>{p.name}</button>
                 ))}
@@ -368,7 +364,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* モーダル: 順位精算 (対局中のメンバーのみ表示) */}
       {modal === 'rank' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl h-[80vh] overflow-y-auto">
@@ -376,74 +371,50 @@ export default function DashboardPage() {
               <h2 className="text-xl font-bold flex items-center gap-2"><Trophy /> 順位精算</h2>
               <button onClick={() => setModal('none')}><X className="text-gray-400" /></button>
             </div>
-
             <div className="space-y-4 mb-6">
               {playingMembers.map(p => (
                 <div key={p.id} className="flex flex-col gap-1">
                   <label className="font-bold text-gray-700">{p.name}</label>
                   <select className="p-3 border rounded-lg bg-gray-50" value={rankSelection[p.id] || ''} onChange={(e) => setRankSelection({...rankSelection, [p.id]: e.target.value as RankType})}>
                     <option value="">選択してください</option>
-                    <option value="1着">1着</option>
-                    <option value="浮き2着">浮き2着</option>
-                    <option value="沈み2着">沈み2着</option>
-                    <option value="浮き3着">浮き3着</option>
-                    <option value="沈み3着">沈み3着</option>
-                    <option value="4着">4着</option>
+                    <option value="1着">1着</option><option value="浮き2着">浮き2着</option><option value="沈み2着">沈み2着</option>
+                    <option value="浮き3着">浮き3着</option><option value="沈み3着">沈み3着</option><option value="4着">4着</option>
                   </select>
                 </div>
               ))}
             </div>
 
-            {/* 飛び賞の設定エリア */}
             <div className="bg-red-50 p-4 rounded-xl mb-6 border border-red-100">
                 <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setIsTobi(!isTobi)}>
                     <div className={`w-5 h-5 border-2 rounded flex items-center justify-center ${isTobi ? 'bg-red-500 border-red-500 text-white' : 'border-gray-400 bg-white'}`}>
                         {isTobi && <Settings size={14} />}
                     </div>
-                    <span className="font-bold text-gray-700 flex items-center gap-1">
-                        <AlertTriangle size={18} className="text-red-500"/>
-                        飛び発生 (チップ±2)
-                    </span>
+                    <span className="font-bold text-gray-700 flex items-center gap-1"><AlertTriangle size={18} className="text-red-500"/>飛び発生 (チップ±2)</span>
                 </div>
-
                 {isTobi && (
-                    <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className="text-xs font-bold text-gray-500 mb-1 block">飛んだ人</label>
-                            <select 
-                                className="w-full p-2 border rounded-lg bg-white"
-                                value={tobiLoserId}
-                                onChange={(e) => setTobiLoserId(e.target.value)}
-                            >
+                            <select className="w-full p-2 border rounded-lg bg-white" value={tobiLoserId} onChange={(e) => setTobiLoserId(e.target.value)}>
                                 <option value="">選択...</option>
-                                {playingMembers.map(p => (
-                                    <option key={p.id} value={p.id} disabled={p.id === tobiWinnerId}>{p.name}</option>
-                                ))}
+                                {playingMembers.map(p => <option key={p.id} value={p.id} disabled={p.id === tobiWinnerId}>{p.name}</option>)}
                             </select>
                         </div>
                         <div>
                             <label className="text-xs font-bold text-gray-500 mb-1 block">飛ばした人</label>
-                            <select 
-                                className="w-full p-2 border rounded-lg bg-white"
-                                value={tobiWinnerId}
-                                onChange={(e) => setTobiWinnerId(e.target.value)}
-                            >
+                            <select className="w-full p-2 border rounded-lg bg-white" value={tobiWinnerId} onChange={(e) => setTobiWinnerId(e.target.value)}>
                                 <option value="">選択...</option>
-                                {playingMembers.map(p => (
-                                    <option key={p.id} value={p.id} disabled={p.id === tobiLoserId}>{p.name}</option>
-                                ))}
+                                {playingMembers.map(p => <option key={p.id} value={p.id} disabled={p.id === tobiLoserId}>{p.name}</option>)}
                             </select>
                         </div>
                     </div>
                 )}
             </div>
-
             <button onClick={handleRankSubmit} className="w-full py-4 bg-orange-600 text-white rounded-xl font-bold text-lg">計算して反映</button>
           </div>
         </div>
       )}
 
-      {/* モーダル: 最終精算 (ここは全員表示) */}
       {modal === 'settlement' && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
@@ -458,13 +429,8 @@ export default function DashboardPage() {
                     return (
                         <div key={p.id} className={`flex justify-between items-center border-b pb-2 ${isSittingOut ? 'opacity-50' : ''}`}>
                             <div>
-                                <span className="font-bold text-lg block flex items-center gap-2">
-                                    {p.name}
-                                    {isSittingOut && <Coffee size={14} />}
-                                </span>
-                                <span className="text-xs text-gray-400">
-                                    チップ:{p.chip}枚 / 順位点:{p.score}
-                                </span>
+                                <span className="font-bold text-lg block flex items-center gap-2">{p.name} {isSittingOut && <Coffee size={14} />}</span>
+                                <span className="text-xs text-gray-400">チップ:{p.chip}枚 / 順位点:{p.score}</span>
                             </div>
                             <span className={`text-2xl font-bold ${total >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
                                 {total > 0 ? '+' : ''}{total.toLocaleString()}
@@ -474,8 +440,7 @@ export default function DashboardPage() {
                 })}
             </div>
             <button onClick={handleGameSave} disabled={saving} className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg flex justify-center items-center gap-2 disabled:opacity-50">
-                <Save size={20} />
-                {saving ? '保存中...' : '保存して終了'}
+                <Save size={20} />{saving ? '保存中...' : '保存して終了'}
             </button>
           </div>
         </div>
