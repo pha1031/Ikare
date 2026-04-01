@@ -233,7 +233,7 @@ export default function DashboardPage() {
         alert('保存失敗: ' + error.message);
         setSaving(false);
     } else {
-        // オプション: 保存完了時に active_games から部屋を削除しても良いですが、今回はそのまま残します
+        await supabase.from('active_games').delete().eq('room_id', roomId);
         alert('保存完了！');
         useGameStore.getState().resetGame();
         router.push('/');
